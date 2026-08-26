@@ -39,7 +39,12 @@
     { key: 'line',     name: 'LINE',     color: '#7dd3fc' },
     { key: 'arrow',    name: 'ARROW',    color: '#60a5fa' },
     { key: 'area',     name: 'ZONE',     color: '#fbbf24' },
-    { key: 'boundary', name: 'BOUNDARY', color: '#ff5a5a' },
+    /* Two kinds of ground: the land you own, and land you have
+       permission to play on. Worth telling apart on the map and in the
+       warning, because trespass and your own trees are different
+       problems. */
+    { key: 'boundary', name: 'MY LAND',  color: '#ff5a5a' },
+    { key: 'permit',   name: 'PLAYABLE', color: '#b6ff3a' },
   ];
 
   /* --- SVG builders -------------------------------------------------- */

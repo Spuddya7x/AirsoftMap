@@ -310,4 +310,9 @@ a.btn { display: inline-block; text-align: center; text-decoration: none; }
   color: #ffb3b3; animation: fencePulse 1.6s ease-in-out infinite;
 }
 @keyframes fencePulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.chip.permit {
+  background: rgba(40, 44, 10, .92); border-color: rgba(182, 255, 58, .6);
+  color: var(--accent);
+}
+.btn.play { border-color: var(--accent); color: var(--accent); }
 .note code { color: var(--accent); font-size: 10px; }

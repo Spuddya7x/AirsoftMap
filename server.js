@@ -138,7 +138,9 @@ function publicPlayer(p) {
  * ------------------------------------------------------------------ */
 
 const SHARED_KINDS = ['station', 'spawn', 'safe', 'chrono', 'parking', 'nogo', 'hazard', 'medic'];
-const SHARED_SHAPES = ['boundary'];
+/* Where you may and may not play is site safety information: it stays
+   visible to every team, even with team lock on. */
+const SHARED_SHAPES = ['boundary', 'permit'];
 const isMarshal = (p) => !!p && String(p.role || '').indexOf('MARSHAL') !== -1;
 
 function canSeePlayer(room, viewer, subject) {
@@ -478,7 +480,7 @@ wss.on('connection', (ws) => {
         const shape = cleanText(msg.shape, 16) || 'line';
         const drawing = {
           id: newId('d'),
-          shape: ['line', 'arrow', 'area', 'boundary'].includes(shape) ? shape : 'line',
+          shape: ['line', 'arrow', 'area', 'boundary', 'permit'].includes(shape) ? shape : 'line',
           color: /^#[0-9a-f]{6}$/i.test(String(msg.color || '')) ? msg.color : '#7dd3fc',
           label: cleanText(msg.label, 40),
           points: pts,

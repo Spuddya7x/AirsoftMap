@@ -189,34 +189,78 @@ const PARCELS = {
     check('picking a plot totals its area (' + (await page.textContent('#parcel-area')) + ')',
       /9\.8[0-9]/.test(await page.textContent('#parcel-area')));
 
-    await page.click('#btn-parcel-adopt');
+    await page.click('#btn-parcel-mine');
     await wait(1200);
     const boundaries = await page.evaluate(() =>
       [...window.AM.state.drawings.values()].filter((r) => r.data.shape === 'boundary').length);
-    check('the plot becomes a shared site boundary', boundaries === 1);
+    check('a picked plot becomes land you own', boundaries === 1);
 
-    /* --- boundary warning ---------------------------------------------- */
+    /* a second plot, marked as permitted rather than owned */
+    await page.evaluate(async () => {
+      const res = await fetch(location.origin + '/api/room/' + window.AM.state.me.room + '/parcels?name=TEST2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/geo+json' },
+        body: JSON.stringify({
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature',
+            properties: { id: 'test-plot-2', areaM2: 20000, areaAcres: 4.94 },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [-0.9453, 51.1407], [-0.9433, 51.1407],
+                [-0.9433, 51.1427], [-0.9453, 51.1427], [-0.9453, 51.1407],
+              ]],
+            },
+          }],
+        }),
+      });
+      return res.ok;
+    });
+    await wait(1400);
+    await page.evaluate(() => {
+      const p = window.AM.parcels;
+      let node = null;
+      p.layer.eachLayer((l) => { node = l; });
+      p.pick(p.data.features[0], node);
+    });
+    await wait(300);
+    await page.click('#btn-parcel-play');
+    await wait(1200);
+    const permits = await page.evaluate(() =>
+      [...window.AM.state.drawings.values()].filter((r) => r.data.shape === 'permit').length);
+    check('a picked plot can instead be marked playable', permits === 1);
+
+    /* --- three-state boundary warning ----------------------------------- */
     const fence = await page.evaluate(() => {
       const chip = document.getElementById('chip-fence');
       const state = window.AM.state;
       state.opts.fence = true;
-
-      state.nav.fix = { lat: 51.1417, lng: -0.9463, acc: 5, src: 'gps', ts: Date.now() };
-      window.AM.checkBoundary();
-      const insideHidden = chip.classList.contains('hidden');
-
-      state.nav.fix = { lat: 51.1500, lng: -0.9463, acc: 5, src: 'gps', ts: Date.now() };
-      window.AM.checkBoundary();
-      const outsideShown = !chip.classList.contains('hidden');
-
+      const at = (lat, lng) => {
+        state.nav.fix = { lat, lng, acc: 5, src: 'gps', ts: Date.now() };
+        window.AM.checkBoundary();
+        return {
+          where: window.AM.whereAmI(state.nav.fix),
+          hidden: chip.classList.contains('hidden'),
+          text: chip.textContent,
+        };
+      };
+      const owned = at(51.1417, -0.9463);      // inside the plot marked MY LAND
+      const permitted = at(51.1417, -0.9443);  // inside the plot marked PLAYABLE
+      const off = at(51.1500, -0.9463);        // outside both
       state.opts.fence = false;
       window.AM.checkBoundary();
-      const mutedHidden = chip.classList.contains('hidden');
-      return { insideHidden, outsideShown, mutedHidden };
+      const muted = chip.classList.contains('hidden');
+      return { owned, permitted, off, muted };
     });
-    check('no warning while inside the boundary', fence.insideHidden === true);
-    check('stepping outside the boundary warns', fence.outsideShown === true);
-    check('the warning can be switched off', fence.mutedHidden === true);
+    check('on your own land: no warning',
+      fence.owned.where === 'owned' && fence.owned.hidden === true);
+    check('on permitted land: told so, not warned (' + fence.permitted.text + ')',
+      fence.permitted.where === 'playable' && fence.permitted.hidden === false &&
+      /PERMITTED/.test(fence.permitted.text));
+    check('off the site altogether: warned (' + fence.off.text + ')',
+      fence.off.where === 'off' && /OFF SITE/.test(fence.off.text));
+    check('the warning can be switched off', fence.muted === true);
   } catch (err) {
     console.error('  ERROR ', err.stack || err.message);
     failures++;

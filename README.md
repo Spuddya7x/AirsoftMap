@@ -40,8 +40,8 @@ It also works where GPS does not: indoors, in tunnels, and underground.
   open elevation data, so you can read the shape of ground that imagery shows
   as a flat green blanket.
 - **Land parcels.** Load the registered freehold extents for your district, tap
-  your plots, and make them the site boundary &mdash; with a warning to anyone
-  who wanders off it.
+  your plots, and mark them as land you own or land you have permission to play
+  on &mdash; with a warning to anyone who wanders off the site.
 - **Offline maps.** Cache the imagery and elevation for your site before you
   lose signal.
 - **Demo mode.** A simulated squad and sample intel, so you can show people what
@@ -118,10 +118,29 @@ Earth or My Maps:
 node scripts/geojson-to-kml.js --input parcels.geojson --out parcels.kml
 ```
 
-**Boundary warnings.** Once a boundary is drawn &mdash; adopted from a parcel, or
-drawn by hand with DRAW &rarr; BOUNDARY &mdash; anyone who steps outside it gets a
-warning on their own screen and a buzz in their pocket. Turn it off in Settings
-if you would rather not.
+**Two kinds of ground.** Most people running games on their own land are also
+playing across a neighbour's, with permission. Those are different things, and
+the map treats them differently:
+
+- **MY LAND** &mdash; plots you own, outlined in red.
+- **PLAYABLE** &mdash; plots you have permission to use, outlined dashed green.
+
+Pick plots from the parcel layer and press either button, or draw them by hand
+with DRAW. A parcel file can also carry its own zoning (`"zone": "boundary"` or
+`"zone": "permit"` on a feature), in which case the whole selection can be
+adopted in one go with each plot landing in the right category.
+
+**Boundary warnings.** Once those zones exist, everyone's own screen tells them
+where they are standing:
+
+| Where | What they see |
+| --- | --- |
+| On land you own | nothing |
+| On permitted land | a quiet PERMITTED LAND chip |
+| Off the site entirely | a flashing OFF SITE warning, a toast and a buzz |
+
+Only leaving the site buzzes, so the warning means something when it fires. Turn
+it off in Settings if you would rather not.
 
 ## Reading the ground
 

@@ -109,12 +109,23 @@
     sheet.classList.remove('hidden');
   };
 
-  /** Turn the picked plots into boundary drawings everyone can see. */
-  Parcels.prototype.adopt = function () {
+  /**
+   * Turn the picked plots into zones everyone can see.
+   * shape 'boundary' is land you own; 'permit' is land you are allowed
+   * to play on but do not own.
+   */
+  Parcels.prototype.adopt = function (shape) {
     const features = this.selectedFeatures();
     if (!features.length) return;
+    const fallback = ICONS.SHAPES.find((s) => s.key === (shape || 'boundary')) ||
+                     ICONS.SHAPES.find((s) => s.key === 'boundary');
     let sent = 0;
     for (const f of features) {
+      /* A parcel file can carry its own zoning ("zone": "permit"), in
+         which case it wins over the button that was pressed - so a file
+         marked up elsewhere can be adopted in one go. */
+      const zoned = f.properties && f.properties.zone;
+      const kind = ICONS.SHAPES.find((s) => s.key === zoned) || fallback;
       const rings = f.geometry.type === 'MultiPolygon'
         ? f.geometry.coordinates.map((poly) => poly[0])
         : [f.geometry.coordinates[0]];
@@ -123,15 +134,15 @@
         if (points.length < 3) continue;
         this.ctx.net.send({
           t: 'draw:add',
-          shape: 'boundary',
-          color: '#ff5a5a',
-          label: 'BOUNDARY',
+          shape: kind.key,
+          color: kind.color,
+          label: kind.name,
           points: points.slice(0, 400),
         });
         sent++;
       }
     }
-    U.toast(sent + ' PLOT' + (sent === 1 ? '' : 'S') + ' SET AS THE SITE BOUNDARY', 3500);
+    U.toast(sent + ' PLOT' + (sent === 1 ? '' : 'S') + ' MARKED', 3500);
     this.clearSelection();
   };
 
@@ -186,7 +197,8 @@
       ev.target.value = '';
     });
     $('#btn-parcels-clear').addEventListener('click', () => this.remove());
-    $('#btn-parcel-adopt').addEventListener('click', () => this.adopt());
+    $('#btn-parcel-mine').addEventListener('click', () => this.adopt('boundary'));
+    $('#btn-parcel-play').addEventListener('click', () => this.adopt('permit'));
     $('#btn-parcel-cancel').addEventListener('click', () => this.clearSelection());
     this.refreshControls();
   };

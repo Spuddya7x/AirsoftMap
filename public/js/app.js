@@ -477,12 +477,13 @@
     const pts = d.points.map((p) => [p.lat, p.lng]);
     const layers = [];
 
-    if (d.shape === 'area' || d.shape === 'boundary') {
+    if (d.shape === 'area' || d.shape === 'boundary' || d.shape === 'permit') {
+      const edge = d.shape !== 'area';
       layers.push(L.polygon(pts, {
         color: d.color,
-        weight: d.shape === 'boundary' ? 3 : 2,
-        dashArray: d.shape === 'boundary' ? '10 8' : null,
-        fillOpacity: d.shape === 'boundary' ? 0.04 : 0.14,
+        weight: d.shape === 'boundary' ? 3 : edge ? 2.5 : 2,
+        dashArray: d.shape === 'boundary' ? '10 8' : d.shape === 'permit' ? '4 7' : null,
+        fillOpacity: edge ? 0.05 : 0.14,
         fillColor: d.color,
         pane: 'intel',
       }));
@@ -527,7 +528,7 @@
 
     for (const layer of layers) layer.addTo(map);
     state.drawings.set(d.id, { data: d, layers });
-    if (d.shape === 'boundary') checkBoundary();
+    if (d.shape === 'boundary' || d.shape === 'permit') checkBoundary();
   }
 
   function removeDrawing(id, quiet) {
@@ -535,7 +536,7 @@
     if (!rec) return;
     for (const layer of rec.layers) map.removeLayer(layer);
     state.drawings.delete(id);
-    if (rec.data.shape === 'boundary') checkBoundary();
+    if (rec.data.shape === 'boundary' || rec.data.shape === 'permit') checkBoundary();
     if (!quiet) return;
   }
 
@@ -1186,30 +1187,47 @@
    * anyone outside it gets told, on their own screen, straight away.
    * ------------------------------------------------------------------ */
 
-  function boundaryRings() {
-    const rings = [];
+  function zoneRings() {
+    const owned = [];
+    const playable = [];
     for (const rec of state.drawings.values()) {
-      if (rec.data.shape === 'boundary') rings.push(rec.data.points);
+      if (rec.data.shape === 'boundary') owned.push(rec.data.points);
+      else if (rec.data.shape === 'permit') playable.push(rec.data.points);
     }
-    return rings;
+    return { owned, playable };
+  }
+
+  /** Where you are standing: on your own land, on land you have
+   *  permission to use, or off the site altogether. */
+  function whereAmI(at) {
+    const { owned, playable } = zoneRings();
+    if (!at || (!owned.length && !playable.length)) return 'unknown';
+    if (owned.some((ring) => U.pointInRing(at, ring))) return 'owned';
+    if (playable.some((ring) => U.pointInRing(at, ring))) return 'playable';
+    return 'off';
   }
 
   function checkBoundary() {
     const chip = $('#chip-fence');
     const fix = state.nav.fix;
-    const rings = boundaryRings();
-    if (!state.opts.fence || !fix || !rings.length) {
+    const where = state.opts.fence ? whereAmI(fix) : 'unknown';
+
+    if (where === 'unknown' || where === 'owned') {
       chip.classList.add('hidden');
-      state.outside = false;
-      return;
+    } else if (where === 'playable') {
+      chip.className = 'chip permit';
+      chip.textContent = 'PERMITTED LAND';
+    } else {
+      chip.className = 'chip warn';
+      chip.textContent = 'OFF SITE';
     }
-    const inside = rings.some((ring) => U.pointInRing(fix, ring));
-    chip.classList.toggle('hidden', inside);
-    if (!inside && !state.outside) {
-      toast('YOU ARE OUTSIDE THE SITE BOUNDARY', 4000);
+
+    /* Only shout when it changes, and only for actually leaving. */
+    if (where === 'off' && state.where !== 'off') {
+      toast('YOU HAVE LEFT THE SITE', 4000);
       if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
     }
-    state.outside = !inside;
+    state.where = where;
   }
 
   /* ------------------------------------------------------------------ *
@@ -1598,7 +1616,7 @@
   $('#f-callsign').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') join(false); });
 
   /* Exposed for debugging from the browser console (and for the tests). */
-  window.AM = { state, map, net, pdr, sitePlan, terrain, parcels, checkBoundary, setFix, ICONS, U };
+  window.AM = { state, map, net, pdr, sitePlan, terrain, parcels, checkBoundary, whereAmI, setFix, ICONS, U };
 
   /* service worker */
   if ('serviceWorker' in navigator) {
