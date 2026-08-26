@@ -76,6 +76,8 @@
   <div class="chip" id="chip-room">--</div>
   <div class="chip" id="chip-link"><span class="dot" id="link-dot"></span><span id="link-text">LINK</span></div>
   <div class="chip" id="chip-gps"><span class="dot" id="gps-dot"></span><span id="gps-text">GPS</span></div>
+  <button id="chip-elev" class="chip" title="Terrain">&#9650; <span id="elev-text">--</span></button>
+  <div class="chip warn hidden" id="chip-fence">OFF YOUR LAND</div>
   <div class="spacer"></div>
   <button id="btn-roster" class="chip">TEAM <b id="roster-count">0</b></button>
 </header>
@@ -170,6 +172,45 @@
   </div>
 </div>
 
+<!-- Picked land parcels -->
+<div id="parcelsheet" class="sheet hidden">
+  <div class="sheet-head">
+    <b>PLOTS PICKED</b>
+    <span class="hint">tap more plots to add them</span>
+    <button class="x" id="btn-parcel-cancel">&#10005;</button>
+  </div>
+  <div class="readout"><span id="parcel-count"></span> &mdash; <span id="parcel-area"></span></div>
+  <div class="row">
+    <button class="btn primary" id="btn-parcel-adopt">USE AS SITE BOUNDARY</button>
+  </div>
+</div>
+
+<!-- Terrain: contours, hillshade, line of sight -->
+<div id="terrainsheet" class="sheet hidden">
+  <div class="sheet-head">
+    <b>TERRAIN</b>
+    <span class="hint" id="terrain-hint">ground shape from open elevation data</span>
+    <button class="x" data-close>&#10005;</button>
+  </div>
+  <div class="panel-body">
+    <label class="toggle"><input type="checkbox" id="opt-contours" /> <span>Contour lines</span></label>
+    <label class="toggle"><input type="checkbox" id="opt-hillshade" /> <span>Hillshade (relief)</span></label>
+    <div class="set-group">
+      <label>CONTOUR INTERVAL</label>
+      <div class="row wrap" id="interval-buttons"></div>
+    </div>
+    <div class="set-group">
+      <label>LINE OF SIGHT</label>
+      <p class="note">Drag the crosshair onto a ridge, a tree line or a
+        position, and check whether it can be seen from where you are standing.</p>
+      <button class="btn" id="btn-los">CHECK ME &rarr; CROSSHAIR</button>
+      <div id="los-chart"></div>
+      <div class="readout" id="los-readout"></div>
+    </div>
+  </div>
+  <div class="readout" id="terrain-readout"></div>
+</div>
+
 <!-- Status sheet -->
 <div id="statesheet" class="sheet hidden">
   <div class="sheet-head"><b>MY STATUS</b><button class="x" data-close>&#10005;</button></div>
@@ -232,6 +273,22 @@
     </div>
 
     <div class="set-group">
+      <label>LAND PARCELS</label>
+      <p class="note">The registered extent of every freehold title in England
+        and Wales is open data. Convert your district with
+        <code>scripts/inspire-to-geojson.js</code>, load it here, then tap your
+        plots to set the boundary everyone sees.</p>
+      <div class="readout" id="parcel-name">no parcel layer loaded</div>
+      <input type="file" id="parcel-file" accept=".geojson,.json,application/geo+json,application/json" style="display:none" />
+      <div class="row wrap">
+        <button class="btn" onclick="document.getElementById('parcel-file').click()">LOAD GEOJSON</button>
+        <button class="btn danger" id="btn-parcels-clear">REMOVE</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="opt-parcels" checked /> <span>Show parcel outlines</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-fence" checked /> <span>Warn when outside the boundary</span></label>
+    </div>
+
+    <div class="set-group">
       <label>OFFLINE MAP</label>
       <p class="note">No signal on site? Cache the tiles for the current view while
         you still have data. Zoom to your land first.</p>
@@ -283,6 +340,8 @@
 <script src="/js/net.js"></script>
 <script src="/js/pdr.js"></script>
 <script src="/js/plan.js"></script>
+<script src="/js/terrain.js"></script>
+<script src="/js/parcels.js"></script>
 <script src="/js/demo.js"></script>
 <script src="/js/app.js"></script>
 </body>

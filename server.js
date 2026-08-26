@@ -36,6 +36,7 @@ function loadState() {
         drawings: new Map((r.drawings || []).map((d) => [d.id, d])),
         players: new Map(),
         plan: r.plan || null,
+        parcels: r.parcels || null,
         teamLock: !!r.teamLock,
         updatedAt: r.updatedAt || 0,
       });
@@ -57,6 +58,7 @@ function saveStateSoon() {
         id: r.id,
         updatedAt: r.updatedAt,
         plan: r.plan || null,
+        parcels: r.parcels || null,
         teamLock: !!r.teamLock,
         markers: [...r.markers.values()],
         drawings: [...r.drawings.values()],
@@ -76,7 +78,7 @@ function getRoom(id) {
   if (!room) {
     room = {
       id, markers: new Map(), drawings: new Map(), players: new Map(),
-      plan: null, teamLock: false, updatedAt: Date.now(),
+      plan: null, parcels: null, teamLock: false, updatedAt: Date.now(),
     };
     rooms.set(id, room);
   }
@@ -233,6 +235,58 @@ app.post('/api/room/:id/plan',
     res.json({ ok: true, plan: room.plan });
   });
 
+/* --- land parcels ---------------------------------------------------
+ * A GeoJSON layer of registered land parcels (see
+ * scripts/inspire-to-geojson.js). Nobody knows where their boundary
+ * actually runs from a title plan with no coordinates on it, so this
+ * puts the registered extents on the map to be tapped and adopted.
+ * ------------------------------------------------------------------- */
+
+const PARCEL_DIR = path.join(DATA_DIR, 'parcels');
+fs.mkdirSync(PARCEL_DIR, { recursive: true });
+app.use('/parcels', express.static(PARCEL_DIR, { maxAge: '1h' }));
+
+app.post('/api/room/:id/parcels',
+  express.raw({ type: ['application/geo+json', 'application/json'], limit: '24mb' }),
+  (req, res) => {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty upload' });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(req.body.toString('utf8'));
+    } catch (err) {
+      return res.status(400).json({ error: 'not valid JSON' });
+    }
+    if (!parsed || parsed.type !== 'FeatureCollection' || !Array.isArray(parsed.features)) {
+      return res.status(400).json({ error: 'expected a GeoJSON FeatureCollection' });
+    }
+    if (!parsed.features.length) return res.status(400).json({ error: 'no features in that file' });
+
+    const roomId = cleanRoomId(req.params.id);
+    const room = getRoom(roomId);
+    const file = roomId + '-' + Date.now().toString(36) + '.geojson';
+    try {
+      fs.writeFileSync(path.join(PARCEL_DIR, file), req.body);
+    } catch (err) {
+      return res.status(500).json({ error: 'could not store the parcels' });
+    }
+    if (room.parcels && room.parcels.file) {
+      fs.unlink(path.join(PARCEL_DIR, room.parcels.file), () => {});
+    }
+
+    room.parcels = {
+      file,
+      url: '/parcels/' + file,
+      count: parsed.features.length,
+      name: cleanText(req.query.name, 40) || 'LAND PARCELS',
+      ts: Date.now(),
+    };
+    room.updatedAt = room.parcels.ts;
+    saveStateSoon();
+    broadcast(room, { t: 'parcels', parcels: room.parcels });
+    res.json({ ok: true, parcels: room.parcels });
+  });
+
 /* Read-only snapshot, used by the printable station sheet. */
 app.get('/api/room/:id', (req, res) => {
   const room = rooms.get(cleanRoomId(req.params.id));
@@ -240,6 +294,7 @@ app.get('/api/room/:id', (req, res) => {
   res.json({
     id: room.id,
     plan: room.plan,
+    parcels: room.parcels,
     markers: [...room.markers.values()],
     drawings: [...room.drawings.values()],
   });
@@ -273,6 +328,7 @@ function snapshotFor(room, viewer) {
     room: room.id,
     teamLock: !!room.teamLock,
     plan: room.plan,
+    parcels: room.parcels,
     players: [...room.players.values()]
       .filter((p) => canSeePlayer(room, viewer, p))
       .map(publicPlayer),
@@ -476,6 +532,16 @@ wss.on('connection', (ws) => {
         room.updatedAt = room.plan.ts;
         saveStateSoon();
         broadcast(room, { t: 'site', plan: room.plan });
+        return;
+      }
+      case 'parcels:clear': {
+        if (room.parcels && room.parcels.file) {
+          fs.unlink(path.join(PARCEL_DIR, room.parcels.file), () => {});
+        }
+        room.parcels = null;
+        room.updatedAt = Date.now();
+        saveStateSoon();
+        broadcast(room, { t: 'parcels', parcels: null });
         return;
       }
       case 'site:clear': {

@@ -291,3 +291,23 @@ input[type=range] { accent-color: var(--accent); width: 100%; padding: 0; backgr
 .btn[disabled] { opacity: .35; pointer-events: none; }
 a.btn { display: inline-block; text-align: center; text-decoration: none; }
 .src-dr .dot { background: var(--warn); }
+
+/* Terrain ------------------------------------------------------------- */
+.contour-label {
+  background: none !important; border: 0 !important; box-shadow: none !important;
+  color: #f0b060 !important; font-family: var(--mono); font-size: 9px;
+  text-shadow: 0 0 3px #000, 0 0 6px #000; padding: 0 !important;
+}
+.contour-label::before { display: none !important; }
+.hillshade-image { mix-blend-mode: multiply; }
+#los-chart { margin: 8px 0; }
+#los-chart svg { width: 100%; height: 110px; display: block; }
+#chip-elev { letter-spacing: 0; }
+
+/* Boundary warning ----------------------------------------------------- */
+.chip.warn {
+  background: rgba(60, 10, 10, .92); border-color: rgba(255, 90, 90, .8);
+  color: #ffb3b3; animation: fencePulse 1.6s ease-in-out infinite;
+}
+@keyframes fencePulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.note code { color: var(--accent); font-size: 10px; }

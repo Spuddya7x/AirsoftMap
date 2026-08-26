@@ -30,6 +30,8 @@
     opts: Object.assign({
       trails: false, accuracy: true, labels: true, lock: false, wake: true,
       snap: false, nobase: false, pdrEnabled: false, aim: true,
+      contours: false, hillshade: false, interval: 10,
+      parcels: true, fence: true,
     }, store.get('opts', {})),
     /* How we currently believe we know where we are. */
     nav: {
@@ -121,6 +123,8 @@
 
   const net = new Net();
   const sitePlan = new SitePlan({ map, net, state });
+  const terrain = new Terrain({ map });
+  const parcels = new Parcels({ map, net, state });
 
   net.on('link', ({ up }) => {
     $('#link-dot').className = 'dot ' + (up ? 'ok' : 'bad');
@@ -153,6 +157,7 @@
     for (const m of msg.markers || []) upsertMarker(m);
     for (const d of msg.drawings || []) upsertDrawing(d);
     sitePlan.apply(msg.plan || null);
+    parcels.apply(msg.parcels || null);
     $('#opt-teamlock').checked = !!msg.teamLock;
     renderRoster();
     refreshStationsIfOpen();
@@ -180,6 +185,11 @@
     clearWorld();
     applySnapshot(msg);
     toast(msg.teamLock ? 'TEAM ONLY: OTHER TEAMS ARE NOW HIDDEN' : 'ALL TEAMS VISIBLE', 3500);
+  });
+
+  net.on('parcels', (msg) => {
+    parcels.apply(msg.parcels);
+    if (msg.parcels) toast(msg.parcels.count + ' LAND PARCELS LOADED');
   });
 
   net.on('site', (msg) => {
@@ -377,8 +387,10 @@
     const at = aimLatLng();
     const me = state.nav.fix;
     const d = U.distance(me, at);
-    node.textContent = d == null ? '--'
-      : U.fmtDist(d) + ' ' + U.compass(U.bearing(me, at));
+    const elev = terrain.elevationAt(at);
+    const range = d == null ? '' : U.fmtDist(d) + ' ' + U.compass(U.bearing(me, at));
+    node.textContent = [range, elev == null ? '' : Math.round(elev) + 'm'].filter(Boolean).join('  ') || '--';
+    $('#elev-text').textContent = elev == null ? '--' : Math.round(elev) + 'm';
   }
 
   function crosshairVisible() {
@@ -501,6 +513,7 @@
 
     for (const layer of layers) layer.addTo(map);
     state.drawings.set(d.id, { data: d, layers });
+    if (d.shape === 'boundary') checkBoundary();
   }
 
   function removeDrawing(id, quiet) {
@@ -508,6 +521,7 @@
     if (!rec) return;
     for (const layer of rec.layers) map.removeLayer(layer);
     state.drawings.delete(id);
+    if (rec.data.shape === 'boundary') checkBoundary();
     if (!quiet) return;
   }
 
@@ -673,6 +687,7 @@
       map.setView([f.lat, f.lng], 18);
     }
     refreshFixChip();
+    checkBoundary();
     renderRoster();
   }
 
@@ -1149,6 +1164,172 @@
     $('#fix-readout').textContent = fixSummary();
   }, 1000);
 
+  /* ------------------------------------------------------------------ *
+   * Boundary
+   *
+   * On private land the thing that gets a game shut down is players
+   * wandering onto the neighbour's ground. Once a boundary is drawn,
+   * anyone outside it gets told, on their own screen, straight away.
+   * ------------------------------------------------------------------ */
+
+  function boundaryRings() {
+    const rings = [];
+    for (const rec of state.drawings.values()) {
+      if (rec.data.shape === 'boundary') rings.push(rec.data.points);
+    }
+    return rings;
+  }
+
+  function checkBoundary() {
+    const chip = $('#chip-fence');
+    const fix = state.nav.fix;
+    const rings = boundaryRings();
+    if (!state.opts.fence || !fix || !rings.length) {
+      chip.classList.add('hidden');
+      state.outside = false;
+      return;
+    }
+    const inside = rings.some((ring) => U.pointInRing(fix, ring));
+    chip.classList.toggle('hidden', inside);
+    if (!inside && !state.outside) {
+      toast('YOU ARE OUTSIDE THE SITE BOUNDARY', 4000);
+      if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
+    }
+    state.outside = !inside;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Terrain
+   * ------------------------------------------------------------------ */
+
+  const INTERVALS = [2, 5, 10, 20];
+
+  function renderIntervals() {
+    const box = $('#interval-buttons');
+    box.innerHTML = '';
+    for (const m of INTERVALS) {
+      box.appendChild(el('button', {
+        class: 'btn' + (m === state.opts.interval ? ' on' : ''),
+        text: m + ' m',
+        onclick: () => {
+          state.opts.interval = m;
+          store.set('opts', state.opts);
+          renderIntervals();
+          applyTerrain();
+        },
+      }));
+    }
+  }
+
+  let terrainTimer = null;
+  function applyTerrain(quiet) {
+    clearTimeout(terrainTimer);
+    terrainTimer = setTimeout(async () => {
+      const result = await terrain.setOptions({
+        contours: state.opts.contours,
+        hillshade: state.opts.hillshade,
+        interval: state.opts.interval,
+      });
+      const node = $('#terrain-readout');
+      if (result.off) node.textContent = 'terrain off';
+      else if (result.busy) return;
+      else if (!result.ok) node.textContent = result.reason || 'no elevation data for this view';
+      else {
+        node.textContent = 'ground ' + Math.round(result.min) + '-' + Math.round(result.max) +
+          'm  /  ' + result.levels + ' contours  /  about ' + result.resolution + 'm per sample';
+      }
+      updateAimReadout();
+      if (!quiet && !result.ok && !result.off && !result.busy) toast('NO ELEVATION DATA CACHED FOR THIS AREA');
+    }, quiet ? 400 : 60);
+  }
+
+  $('#chip-elev').addEventListener('click', async () => {
+    closePanels();
+    renderIntervals();
+    openSheet('#terrainsheet');
+    /* Load the tile under the crosshair so the height readout means
+       something even when contours are off. */
+    const at = aimLatLng();
+    const elev = await terrain.elevationAtAsync(at);
+    $('#elev-text').textContent = elev == null ? '--' : Math.round(elev) + 'm';
+    updateAimReadout();
+    if (elev == null) $('#terrain-readout').textContent = 'no elevation data for this point (offline?)';
+  });
+
+  map.on('moveend zoomend', () => {
+    if (state.opts.contours || state.opts.hillshade) applyTerrain(true);
+  });
+
+  /* --- line of sight -------------------------------------------------- */
+
+  let sightLayer = null;
+
+  $('#btn-los').addEventListener('click', async () => {
+    const me = state.nav.fix;
+    if (!me) return toast('NO POSITION YET');
+    const to = aimLatLng();
+    $('#los-readout').textContent = 'reading the ground...';
+
+    const los = await terrain.lineOfSight(me, to, 1.6, 1.6);
+    if (!los.ok) {
+      $('#los-readout').textContent = 'no elevation data along that line';
+      return;
+    }
+
+    if (sightLayer) map.removeLayer(sightLayer);
+    const line = [[me.lat, me.lng], [to.lat, to.lng]];
+    sightLayer = L.layerGroup([
+      L.polyline(line, {
+        color: los.visible ? '#4ade80' : '#ff5a5a',
+        weight: 3, opacity: 0.9, dashArray: los.visible ? null : '8 6', interactive: false,
+      }),
+    ]);
+    if (los.blockedAt) {
+      sightLayer.addLayer(L.circleMarker([los.blockedAt.lat, los.blockedAt.lng], {
+        radius: 6, color: '#ff5a5a', fillColor: '#ff5a5a', fillOpacity: 0.6, interactive: false,
+      }));
+    }
+    sightLayer.addTo(map);
+    setTimeout(() => { if (sightLayer) { map.removeLayer(sightLayer); sightLayer = null; } }, 30000);
+
+    const dist = U.fmtDist(los.profile.total);
+    $('#los-readout').textContent = los.visible
+      ? 'VISIBLE  /  ' + dist + '  /  ' + Math.round(los.target - los.eye) + 'm height difference'
+      : 'BLOCKED  /  ' + dist + '  /  ground is ' + los.byMetres + 'm too high ' +
+        U.fmtDist(los.blockedAt.d) + ' along';
+    drawProfile(los);
+  });
+
+  /** Ground profile with the sight line drawn over it. */
+  function drawProfile(los) {
+    const pts = los.profile.samples.filter((x) => x.elev != null);
+    if (pts.length < 2) return;
+    const heights = pts.map((x) => x.elev).concat([los.eye, los.target]);
+    const lo = Math.min.apply(null, heights);
+    const hi = Math.max.apply(null, heights);
+    const pad = (hi - lo) * 0.2 + 2;
+    const top = hi + pad;
+    const bottom = lo - pad;
+    const X = (d) => (d / (los.profile.total || 1)) * 100;
+    const Y = (v) => 100 - ((v - bottom) / (top - bottom)) * 100;
+
+    const ground = pts.map((x) => X(x.d).toFixed(2) + ',' + Y(x.elev).toFixed(2)).join(' ');
+    const blocked = los.blockedAt
+      ? '<circle cx="' + X(los.blockedAt.d).toFixed(2) + '" cy="' + Y(los.blockedAt.elev).toFixed(2) +
+        '" r="2.5" fill="#ff5a5a" vector-effect="non-scaling-stroke"/>'
+      : '';
+
+    $('#los-chart').innerHTML =
+      '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="ground profile">' +
+      '<polygon points="0,100 ' + ground + ' 100,100" fill="rgba(201,138,75,.35)" stroke="none"/>' +
+      '<polyline points="' + ground + '" fill="none" stroke="#c98a4b" stroke-width="1.2" ' +
+      'vector-effect="non-scaling-stroke"/>' +
+      '<line x1="0" y1="' + Y(los.eye).toFixed(2) + '" x2="100" y2="' + Y(los.target).toFixed(2) + '" ' +
+      'stroke="' + (los.visible ? '#4ade80' : '#ff5a5a') + '" stroke-width="1.6" ' +
+      (los.visible ? '' : 'stroke-dasharray="4 3" ') + 'vector-effect="non-scaling-stroke"/>' +
+      blocked + '</svg>';
+  }
+
   /* panels */
   $('#btn-roster').addEventListener('click', () => {
     const panel = $('#roster');
@@ -1164,7 +1345,8 @@
   });
 
   /* options */
-  const OPT_KEYS = ['trails', 'accuracy', 'labels', 'lock', 'wake', 'snap', 'nobase', 'aim'];
+  const OPT_KEYS = ['trails', 'accuracy', 'labels', 'lock', 'wake', 'snap', 'nobase',
+                    'aim', 'contours', 'hillshade', 'parcels', 'fence'];
   function bindOptions() {
     for (const key of OPT_KEYS) {
       const box = $('#opt-' + key);
@@ -1190,6 +1372,9 @@
       for (const [id, layer] of state.layers.trails) { map.removeLayer(layer); state.layers.trails.delete(id); }
     }
     for (const p of state.players.values()) drawPlayer(p);
+    parcels.setVisible(!!state.opts.parcels);
+    checkBoundary();
+    applyTerrain(true);
     if (state.opts.wake) requestWakeLock();
     else if (state.wakeLock) { state.wakeLock.release().catch(() => {}); state.wakeLock = null; }
   }
@@ -1289,6 +1474,10 @@
     const z = Math.round(map.getZoom());
     const maxZ = Math.min(layer.options.maxNativeZoom || 19, z + 3);
     const urls = tileUrls(layer, map.getBounds().pad(0.15), Math.max(z - 1, 1), maxZ, 2500);
+    /* Elevation too, so contours and line of sight keep working off grid. */
+    for (let dz = 12; dz <= 15; dz++) {
+      urls.push.apply(urls, terrain.tileUrls(map.getBounds().pad(0.15), dz));
+    }
     readout.textContent = 'caching ' + urls.length + ' tiles...';
     let done = 0;
     let failed = 0;
@@ -1338,7 +1527,9 @@
   renderLayerButtons();
   bindOptions();
   renderPosModes();
+  renderIntervals();
   sitePlan.bind();
+  parcels.bind();
 
   function join(demoMode) {
     const callsign = ($('#f-callsign').value || '').trim().toUpperCase() ||
@@ -1393,7 +1584,7 @@
   $('#f-callsign').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') join(false); });
 
   /* Exposed for debugging from the browser console (and for the tests). */
-  window.AM = { state, map, net, pdr, sitePlan, ICONS, U };
+  window.AM = { state, map, net, pdr, sitePlan, terrain, parcels, checkBoundary, setFix, ICONS, U };
 
   /* service worker */
   if ('serviceWorker' in navigator) {

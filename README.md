@@ -36,7 +36,14 @@ It also works where GPS does not: indoors, in tunnels, and underground.
 - **Team-only games.** Optionally lock the game so each team sees only its own
   players and its own intel. Safety and site information stays visible to
   everyone, and marshals see the lot.
-- **Offline maps.** Cache the imagery for your site before you lose signal.
+- **Terrain.** Contours, hillshade and line-of-sight profiles generated from
+  open elevation data, so you can read the shape of ground that imagery shows
+  as a flat green blanket.
+- **Land parcels.** Load the registered freehold extents for your district, tap
+  your plots, and make them the site boundary &mdash; with a warning to anyone
+  who wanders off it.
+- **Offline maps.** Cache the imagery and elevation for your site before you
+  lose signal.
 - **Demo mode.** A simulated squad and sample intel, so you can show people what
   it does with no GPS and no other players.
 
@@ -63,6 +70,71 @@ Browsers only give a web page GPS **and** a service worker over HTTPS (or on
 
 Then send everyone `https://your-host/?room=YOURGAME` — the link pre-fills the
 game code. On Android and iOS, "Add to Home Screen" installs it as an app.
+
+## Knowing where your boundary actually is
+
+Owning the land and knowing where it ends are different problems. A title plan
+is a picture with no coordinates on it, so on the ground the boundary is
+guesswork &mdash; which is how games end up on a neighbour's trees.
+
+**Land parcels.** The registered extent of every freehold title in England and
+Wales is open data: HM Land Registry's INSPIRE Index Polygons, published per
+local authority under the Open Government Licence. Convert your district and
+load it:
+
+```bash
+# 1. download your district (no account needed) from
+#    https://use-land-property-data.service.gov.uk/datasets/inspire/download
+unzip Wealden_District_Council.zip
+
+# 2. cut out the bit you care about and convert it to GeoJSON
+node scripts/inspire-to-geojson.js \
+  --input Land_Registry_Cadastral_Parcels.gml \
+  --centre 50.9550,0.3325 --radius 4000 \
+  --out parcels.geojson
+```
+
+Then Settings &rarr; LAND PARCELS &rarr; LOAD GEOJSON, pan to your wood, and tap
+your plots: the outlines turn green, the area adds up in hectares and acres, and
+USE AS SITE BOUNDARY turns them into the boundary everyone in the game sees.
+
+Coordinates are converted from British National Grid with a Helmert transform,
+which is good to about 5 m. Two things worth knowing: INSPIRE polygons are
+*indicative* extents, not a surveyed boundary; and aerial imagery from different
+providers can sit a few metres apart, so a small mismatch between a parcel edge
+and a hedge on the photo is normal.
+
+To check them against imagery you trust, convert to KML and open it in Google
+Earth or My Maps:
+
+```bash
+node scripts/geojson-to-kml.js --input parcels.geojson --out parcels.kml
+```
+
+**Boundary warnings.** Once a boundary is drawn &mdash; adopted from a parcel, or
+drawn by hand with DRAW &rarr; BOUNDARY &mdash; anyone who steps outside it gets a
+warning on their own screen and a buzz in their pocket. Turn it off in Settings
+if you would rather not.
+
+## Reading the ground
+
+Satellite imagery of woodland is a green blanket: it says nothing about the
+shape of the ground, which is most of what matters when you are deciding where
+people can move, see and hold. Tap the height chip in the top bar for:
+
+- **Contour lines** at 2, 5, 10 or 20 m, generated on the phone by marching
+  squares over open elevation data (the AWS Terrain Tiles dataset). No contour
+  map to source, no files to load.
+- **Hillshade**, so a slope reads as a slope through the tree canopy.
+- **Line of sight** between where you are standing and the crosshair, with a
+  ground profile: whether a position can be seen, and if not, what is in the way
+  and how far along.
+
+Elevation tiles are about 30 m resolution &mdash; honest for the shape of the
+ground, no substitute for LIDAR. If you have LIDAR for your site, export a
+contour or hillshade image from QGIS and load it as a site plan instead. The
+elevation tiles are cached by CACHE THIS AREA along with the imagery, so
+contours and line of sight keep working with no signal.
 
 ## Sites with no signal
 
@@ -185,9 +257,10 @@ the error rather than a confident dot.
 ## Testing
 
 ```bash
-npm test             # both suites
-npm run test:smoke   # two browsers join a game and check they see each other
-npm run test:indoor  # station check-ins, dead reckoning, team lock, site plans
+npm test              # all three suites
+npm run test:smoke    # two browsers join a game and check they see each other
+npm run test:indoor   # station check-ins, dead reckoning, team lock, site plans
+npm run test:terrain  # contours, hillshade, line of sight, parcels, boundary
 ```
 
 The indoor suite drives the step detector with synthetic accelerometer events
@@ -207,6 +280,14 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
   accuracy attached.
 - `public/js/pdr.js` — step detection, per-player stride calibration, heading,
   and the drift model.
+- `public/js/terrain.js` — elevation tiles, contours by marching squares,
+  hillshade, ground profiles and line of sight.
+- `public/js/parcels.js` — the registered-parcel layer and adopting plots as the
+  site boundary.
+- `scripts/inspire-to-geojson.js` — HM Land Registry INSPIRE Index Polygons
+  (GML, British National Grid) to GeoJSON.
+- `scripts/geojson-to-kml.js` — GeoJSON to KML, for checking a boundary in
+  Google Earth.
 - `public/js/plan.js` — site plan overlay, scaling, rotation and placement.
 - `public/js/net.js` — WebSocket client with reconnect and position replay.
 - `public/sw.js` — service worker: caches the app shell, site plans and map
@@ -215,5 +296,8 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
 Positions are only ever sent to players sharing your game code, and only while
 the page is open.
 
-Imagery &copy; Esri, OpenTopoMap and OpenStreetMap contributors. QR encoding by
-[qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).
+Imagery &copy; Esri, OpenTopoMap and OpenStreetMap contributors. Elevation from
+the [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) open
+dataset. Land parcels from HM Land Registry INSPIRE Index Polygons, &copy; Crown
+copyright and database right, under the Open Government Licence v3.0. QR encoding
+by [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).

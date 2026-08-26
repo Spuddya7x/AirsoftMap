@@ -83,6 +83,24 @@
     return Math.round(m / 60) + 'h ago';
   }
 
+  /** Is a point inside this ring of {lat,lng}? Ray casting, good enough
+   *  at the scale of a field: the ring is small compared with the globe. */
+  function pointInRing(point, ring) {
+    if (!point || !Array.isArray(ring) || ring.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const yi = ring[i].lat;
+      const xi = ring[i].lng;
+      const yj = ring[j].lat;
+      const xj = ring[j].lng;
+      if ((yi > point.lat) !== (yj > point.lat)) {
+        const x = ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi;
+        if (point.lng < x) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
   /* --- storage ------------------------------------------------------ */
   const store = {
     get(key, fallback) {
@@ -121,7 +139,7 @@
   }
 
   global.U = {
-    $, $$, el, distance, bearing, pathLength, destination, compass,
+    $, $$, el, distance, bearing, pathLength, destination, compass, pointInRing,
     fmtDist, fmtAge, store, toast, escapeHtml, uid, rad, deg,
   };
 })(window);
