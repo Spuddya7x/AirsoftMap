@@ -284,7 +284,11 @@ function readMembers(file, onMember) {
 
   await readMembers(args.input, (member) => {
     scanned++;
-    const idMatch = member.match(/gml:id="([^"]+)"/);
+    /* INSPIREID is the stable national identifier; the gml:id is only
+       unique within one authority's file, so titles that straddle a
+       district boundary cannot be de-duplicated by it. */
+    const inspireMatch = member.match(/<LR:INSPIREID>([^<]+)<\/LR:INSPIREID>/);
+    const idMatch = inspireMatch || member.match(/gml:id="([^"]+)"/);
     const rings = [];
     const posRe = /<gml:posList[^>]*>([\s\S]*?)<\/gml:posList>/g;
     let m;

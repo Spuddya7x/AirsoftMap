@@ -98,6 +98,13 @@ Then Settings &rarr; LAND PARCELS &rarr; LOAD GEOJSON, pan to your wood, and tap
 your plots: the outlines turn green, the area adds up in hectares and acres, and
 USE AS SITE BOUNDARY turns them into the boundary everyone in the game sees.
 
+**Watch the district boundary.** INSPIRE is published per local authority, and
+the files stop dead at the district line &mdash; which often runs down the middle
+of a wood. If your parcels suddenly go from a fine grid of plots to one big
+undivided polygon, that is the join, not the truth. Download both districts,
+convert each, and merge them; parcels are de-duplicated on their INSPIREID,
+which is unique nationally.
+
 Coordinates are converted from British National Grid with a Helmert transform,
 which is good to about 5 m. Two things worth knowing: INSPIRE polygons are
 *indicative* extents, not a surveyed boundary; and aerial imagery from different
