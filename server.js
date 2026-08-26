@@ -129,6 +129,83 @@ function publicPlayer(p) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Recording
+ *
+ * Every game is written to an append-only log so it can be played back
+ * afterwards: who was where, minute by minute, with the markers and
+ * status calls that went with it. One line per event, which keeps
+ * writing cheap during a game and makes reading a time window a matter
+ * of a scan rather than a database.
+ * ------------------------------------------------------------------ */
+
+const REPLAY_DIR = path.join(DATA_DIR, 'replays');
+const REPLAY_MIN_GAP = 1500;          // ms between recorded fixes per player
+const REPLAY_MAX_BYTES = 64 * 1024 * 1024;
+const SESSION_GAP_MS = 20 * 60000;    // quiet for this long starts a new game
+fs.mkdirSync(REPLAY_DIR, { recursive: true });
+
+const replayFile = (roomId) => path.join(REPLAY_DIR, roomId + '.jsonl');
+const replayStreams = new Map();       // roomId -> WriteStream
+
+function replayStream(roomId) {
+  let stream = replayStreams.get(roomId);
+  if (stream) return stream;
+  const file = replayFile(roomId);
+  try {
+    /* Roll the log over rather than letting a long-running site grow
+       without bound; one previous generation is kept. */
+    const stat = fs.existsSync(file) && fs.statSync(file);
+    if (stat && stat.size > REPLAY_MAX_BYTES) fs.renameSync(file, file + '.1');
+  } catch (err) {
+    console.error('[replay] rotate failed:', err.message);
+  }
+  stream = fs.createWriteStream(file, { flags: 'a' });
+  stream.on('error', (err) => {
+    console.error('[replay] write failed:', err.message);
+    replayStreams.delete(roomId);
+  });
+  replayStreams.set(roomId, stream);
+  return stream;
+}
+
+function record(roomId, line) {
+  if (!roomId) return;
+  replayStream(roomId).write(JSON.stringify(line) + '\n');
+}
+
+/** Positions, thinned: a metre of extra precision is not worth the disk. */
+function recordPosition(roomId, p) {
+  if (!(p.lastRecorded > 0) || p.ts - p.lastRecorded >= REPLAY_MIN_GAP) {
+    p.lastRecorded = p.ts;
+    record(roomId, {
+      k: 'p', t: p.ts, id: p.id,
+      a: Number(p.lat.toFixed(6)), o: Number(p.lng.toFixed(6)),
+      h: p.hdg == null ? null : Math.round(p.hdg),
+      s: p.status === 'ok' ? undefined : p.status,
+      c: p.acc == null ? undefined : Math.round(p.acc),
+      r: p.src === 'gps' ? undefined : p.src,
+    });
+  }
+}
+
+/** Read the log back, keeping only lines inside a window. */
+function readReplay(roomId, from, to) {
+  const file = replayFile(roomId);
+  if (!fs.existsSync(file)) return [];
+  const out = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line) continue;
+    let row;
+    try { row = JSON.parse(line); } catch (err) { continue; }
+    if (typeof row.t !== 'number') continue;
+    if (from && row.t < from) continue;
+    if (to && row.t > to) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Visibility
  *
  * With team lock on, a game can be run where each team only sees its own
@@ -289,6 +366,81 @@ app.post('/api/room/:id/parcels',
     res.json({ ok: true, parcels: room.parcels });
   });
 
+/* --- replay ---------------------------------------------------------
+ * Games are split on long gaps in the log rather than being started and
+ * stopped by hand: nobody remembers to press record.
+ * ------------------------------------------------------------------- */
+
+app.get('/api/room/:id/sessions', (req, res) => {
+  const roomId = cleanRoomId(req.params.id);
+  const rows = readReplay(roomId);
+  const sessions = [];
+  let current = null;
+
+  for (const row of rows) {
+    if (!current || row.t - current.end > SESSION_GAP_MS) {
+      current = { start: row.t, end: row.t, samples: 0, markers: 0, players: {} };
+      sessions.push(current);
+    }
+    current.end = row.t;
+    if (row.k === 'p') { current.samples++; current.players[row.id] = true; }
+    if (row.k === 'join') current.players[row.id] = true;
+    if (row.k === 'marker') current.markers++;
+  }
+
+  res.json({
+    room: roomId,
+    sessions: sessions
+      .filter((s) => s.samples > 4)
+      .map((s) => ({
+        start: s.start,
+        end: s.end,
+        ms: s.end - s.start,
+        players: Object.keys(s.players).length,
+        samples: s.samples,
+        markers: s.markers,
+      }))
+      .reverse(),
+  });
+});
+
+app.get('/api/room/:id/replay', (req, res) => {
+  const roomId = cleanRoomId(req.params.id);
+  const from = Number(req.query.from) || 0;
+  const to = Number(req.query.to) || Date.now();
+  if (to - from > 24 * 3600 * 1000) {
+    return res.status(400).json({ error: 'window is too long (24 hours max)' });
+  }
+
+  const rows = readReplay(roomId, from, to);
+  const players = {};
+  const tracks = {};
+  const events = [];
+
+  for (const row of rows) {
+    if (row.k === 'join') {
+      players[row.id] = { callsign: row.callsign, team: row.team, role: row.role };
+    } else if (row.k === 'p') {
+      (tracks[row.id] = tracks[row.id] || []).push([row.t, row.a, row.o, row.h, row.s || 'ok']);
+    } else {
+      events.push(row);
+    }
+  }
+
+  /* Anyone who moved but whose join fell outside the window still needs
+     a name, so fall back to whatever the room knows now. */
+  const room = rooms.get(roomId);
+  for (const id of Object.keys(tracks)) {
+    if (players[id]) continue;
+    const live = room && room.players.get(id);
+    players[id] = live
+      ? { callsign: live.callsign, team: live.team, role: live.role }
+      : { callsign: 'UNKNOWN', team: 'BLUE', role: '' };
+  }
+
+  res.json({ room: roomId, from, to, players, tracks, events });
+});
+
 /* Read-only snapshot, used by the printable station sheet. */
 app.get('/api/room/:id', (req, res) => {
   const room = rooms.get(cleanRoomId(req.params.id));
@@ -376,6 +528,10 @@ wss.on('connection', (ws) => {
         snapshotFor(room, player)));
       broadcast(room, { t: 'player', player: publicPlayer(player) }, ws,
         (viewer) => canSeePlayer(room, viewer, player));
+      record(roomId, {
+        k: 'join', t: Date.now(), id, callsign: player.callsign,
+        team: player.team, role: player.role,
+      });
       console.log('[join] ' + player.callsign + ' (' + player.team + ') -> ' + roomId);
       return;
     }
@@ -407,6 +563,7 @@ wss.on('connection', (ws) => {
           t: 'pos', id: p.id, lat: p.lat, lng: p.lng, acc: p.acc,
           hdg: p.hdg, spd: p.spd, batt: p.batt, src: p.src, ts: p.ts,
         }, ws, (viewer) => canSeePlayer(room, viewer, p));
+        recordPosition(room.id, p);
         return;
       }
 
@@ -419,6 +576,7 @@ wss.on('connection', (ws) => {
         p.status = s;
         broadcast(room, { t: 'player', player: publicPlayer(p) }, null,
           (viewer) => canSeePlayer(room, viewer, p));
+        record(room.id, { k: 'status', t: Date.now(), id: p.id, s });
         return;
       }
 
@@ -444,6 +602,11 @@ wss.on('connection', (ws) => {
         saveStateSoon();
         broadcast(room, { t: 'marker', marker }, null,
           (viewer) => canSeeItem(room, viewer, marker));
+        record(room.id, {
+          k: 'marker', t: marker.ts, id: marker.id, kind: marker.kind,
+          label: marker.label, a: marker.lat, o: marker.lng,
+          by: marker.byName, team: marker.team,
+        });
         return;
       }
       case 'marker:update': {
@@ -568,6 +731,9 @@ wss.on('connection', (ws) => {
           by: from.callsign || '',
           ts: Date.now(),
         }, null, (viewer) => canSeePlayer(room, viewer, from));
+        record(room.id, {
+          k: 'ping', t: Date.now(), a: ll.lat, o: ll.lng, by: from.callsign || '',
+        });
         return;
       }
       case 'msg': {

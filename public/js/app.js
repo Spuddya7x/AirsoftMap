@@ -139,6 +139,7 @@
   const sitePlan = new SitePlan({ map, net, state });
   const terrain = new Terrain({ map });
   const parcels = new Parcels({ map, net, state });
+  const replay = new Replay({ map, state, net });
 
   net.on('link', ({ up }) => {
     $('#link-dot').className = 'dot ' + (up ? 'ok' : 'bad');
@@ -181,6 +182,7 @@
   net.on('pos', (msg) => {
     const p = state.players.get(msg.id);
     if (!p) return;
+    if (replay.active()) { Object.assign(p, msg); return; }
     Object.assign(p, msg, { stale: false, online: true });
     drawPlayer(p);
     renderRoster();
@@ -463,9 +465,17 @@
   function dropMarker(kindKey, latlng) {
     const k = ICONS.kind(kindKey);
     const at = latlng || state.pendingLatLng || aimLatLng();
-    net.send({ t: 'marker:add', kind: k.key, label: k.name, lat: at.lat, lng: at.lng });
+    let label = k.name;
+    /* A landmark is only useful if it is called what everyone calls it:
+       the bunker, the donut, the grave. */
+    if (k.key === 'poi') {
+      label = (prompt('Name this place (the bunker, the donut, the grave...)') || '').trim();
+      if (!label) { state.pendingLatLng = null; return; }
+      label = label.toUpperCase().slice(0, 40);
+    }
+    net.send({ t: 'marker:add', kind: k.key, label, lat: at.lat, lng: at.lng });
     state.pendingLatLng = null;
-    toast(k.name + ' DROPPED');
+    toast(label + ' DROPPED');
   }
 
   /* ------------------------------------------------------------------ *
@@ -1362,6 +1372,153 @@
       blocked + '</svg>';
   }
 
+  /* ------------------------------------------------------------------ *
+   * Replay
+   * ------------------------------------------------------------------ */
+
+  const SPEEDS = [1, 4, 8, 30, 120];
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const stamp = (ms) => new Date(ms).toLocaleString([], {
+    weekday: 'short', day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit',
+  });
+  const mmss = (ms) => {
+    const total = Math.round(ms / 1000);
+    if (total < 60) return total + 's';
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    if (h) return h + 'h ' + m + 'm';
+    return m + 'm ' + (total % 60) + 's';
+  };
+
+  async function openReplay() {
+    closePanels();
+    openSheet('#replaysheet');
+    $('#replay-transport').classList.add('hidden');
+    const list = $('#session-list');
+    list.innerHTML = '<li><span class="station-name">reading the game log...</span></li>';
+
+    let sessions;
+    try {
+      sessions = await replay.listSessions();
+    } catch (err) {
+      list.innerHTML = '<li><span class="station-name">' + U.escapeHtml(err.message) + '</span></li>';
+      return;
+    }
+
+    list.innerHTML = '';
+    if (!sessions.length) {
+      list.appendChild(el('li', {
+        html: '<span class="station-name">No games recorded yet. Everything anyone ' +
+              'does while connected is logged, so play a game and it will appear here.</span>',
+      }));
+      return;
+    }
+    for (const s of sessions) {
+      const li = el('li', { onclick: () => startReplay(s) });
+      li.innerHTML =
+        '<span class="station-code">' + mmss(s.ms) + '</span>' +
+        '<span class="station-name">' + U.escapeHtml(stamp(s.start)) +
+        '<br><span class="rp-when">' + s.players + ' player' + (s.players === 1 ? '' : 's') +
+        ' / ' + s.markers + ' markers</span></span>' +
+        '<span class="station-range">&#9654;</span>';
+      list.appendChild(li);
+    }
+  }
+
+  async function startReplay(session) {
+    $('#replay-hint').textContent = 'loading...';
+    try {
+      await replay.open(session);
+    } catch (err) {
+      $('#replay-hint').textContent = err.message;
+      return;
+    }
+
+    document.body.classList.add('replaying');
+    /* Live blips would sit on top of the ghosts and confuse everything. */
+    for (const [, layer] of state.layers.players) map.removeLayer(layer);
+    for (const [, layer] of state.layers.accuracy) map.removeLayer(layer);
+
+    /* Clearing the mode closes every sheet, so do it before reopening
+       this one, not after. */
+    if (state.mode) setMode(null);
+    openSheet('#replaysheet');
+    $('#session-list').classList.add('hidden');
+    $('#replay-transport').classList.remove('hidden');
+    $('#chip-replay').classList.remove('hidden');
+    $('#replay-hint').textContent = stamp(session.start);
+    renderReplayRoster();
+    replay.onTick = onReplayTick;
+    replay.seek(session.start);
+
+    const bounds = [];
+    for (const id of Object.keys(replay.data.tracks)) {
+      for (const row of replay.data.tracks[id]) bounds.push([row[1], row[2]]);
+    }
+    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.15));
+    replay.play();
+  }
+
+  function onReplayTick(at) {
+    const s = replay.session;
+    const f = (at - s.start) / Math.max(1, s.end - s.start);
+    $('#rp-scrub').value = Math.round(f * 1000);
+    $('#rp-clock').textContent =
+      clock(at) + '   /   ' + mmss(at - s.start) + ' into a ' + mmss(s.ms) + ' game';
+    $('#chip-replay-time').textContent = clock(at);
+    $('#rp-play').textContent = replay.playing ? 'PAUSE' : 'PLAY';
+  }
+
+  function renderReplayRoster() {
+    const list = $('#rp-roster');
+    list.innerHTML = '';
+    for (const r of replay.roster()) {
+      const li = el('li', {
+        onclick: () => {
+          const at = replay.sampleAt(replay.data.tracks[r.id], replay.at);
+          if (at) map.panTo([at.lat, at.lng]);
+        },
+      });
+      li.innerHTML =
+        '<span class="r-swatch" style="background:' + ICONS.teamColor(r.team) +
+        ';color:' + ICONS.teamColor(r.team) + '"></span>' +
+        '<span class="station-name">' + U.escapeHtml(r.callsign) + '</span>' +
+        '<span class="station-range">' + U.fmtDist(r.metres) + ' covered</span>';
+      list.appendChild(li);
+    }
+  }
+
+  function exitReplay() {
+    if (!replay.active()) return;
+    replay.close();
+    document.body.classList.remove('replaying');
+    $('#chip-replay').classList.add('hidden');
+    $('#session-list').classList.remove('hidden');
+    $('#replay-transport').classList.add('hidden');
+    for (const p of state.players.values()) drawPlayer(p);
+    toast('BACK TO LIVE');
+  }
+
+  $('#btn-replay').addEventListener('click', openReplay);
+  $('#chip-replay').addEventListener('click', () => openSheet('#replaysheet'));
+  $('#rp-play').addEventListener('click', () => { replay.toggle(); onReplayTick(replay.at); });
+  $('#rp-back').addEventListener('click', () => replay.seek(replay.at - 30000));
+  $('#rp-exit').addEventListener('click', () => { exitReplay(); closeSheets(); });
+  $('#rp-speed').addEventListener('click', () => {
+    const next = SPEEDS[(SPEEDS.indexOf(replay.speed) + 1) % SPEEDS.length];
+    replay.speed = next;
+    $('#rp-speed').innerHTML = next + '&times;';
+  });
+  $('#rp-scrub').addEventListener('input', (ev) => {
+    if (!replay.active()) return;
+    replay.pause();
+    const s = replay.session;
+    replay.seek(s.start + (Number(ev.target.value) / 1000) * (s.end - s.start));
+  });
+
   /* panels */
   $('#btn-roster').addEventListener('click', () => {
     const panel = $('#roster');
@@ -1616,7 +1773,7 @@
   $('#f-callsign').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') join(false); });
 
   /* Exposed for debugging from the browser console (and for the tests). */
-  window.AM = { state, map, net, pdr, sitePlan, terrain, parcels, checkBoundary, whereAmI, setFix, ICONS, U };
+  window.AM = { state, map, net, pdr, sitePlan, terrain, parcels, replay, checkBoundary, whereAmI, setFix, ICONS, U };
 
   /* service worker */
   if ('serviceWorker' in navigator) {

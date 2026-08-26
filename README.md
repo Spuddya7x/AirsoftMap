@@ -33,6 +33,8 @@ It also works where GPS does not: indoors, in tunnels, and underground.
   and reported status. Tap a name to jump to them.
 - **Status reports.** IN PLAY / HIT / NEED HELP / RESPAWNING, one tap.
 - **Map pings.** Ping a spot and everyone's map flashes there.
+- **Replay.** Every game records itself; afterwards, scrub back through it and
+  watch everyone move.
 - **Team-only games.** Optionally lock the game so each team sees only its own
   players and its own intel. Safety and site information stays visible to
   everyone, and marshals see the lot.
@@ -171,6 +173,32 @@ contour or hillshade image from QGIS and load it as a site plan instead. The
 elevation tiles are cached by CACHE THIS AREA along with the imagery, so
 contours and line of sight keep working with no signal.
 
+## Replaying a game
+
+Every game records itself. Nobody has to remember to press anything: the server
+appends each position, marker, hit call and ping to a log, and splits it into
+games wherever the site went quiet for twenty minutes.
+
+Afterwards, Settings &rarr; REPLAY A GAME lists what it has. Pick one and the
+map turns into a playback: every player's blip moving where they actually moved,
+with a tail behind each one, and intel appearing at the moment it was dropped.
+Scrub the timeline, jump back thirty seconds, or run it at 1&times; up to
+120&times;. The roster totals the ground each player covered, and tapping a name
+follows them.
+
+Useful for settling an argument about who shot whom from where, for showing a
+squad what actually happened, and for working out why one flank never arrived.
+
+Positions are thinned to one every 1.5 seconds on the way in, which is plenty
+for playback and keeps a three-hour game with ten players to a few megabytes.
+The log lives in `DATA_DIR/replays/<GAME>.jsonl` &mdash; plain JSON lines, one
+event each, so it is easy to read with anything else. It rotates at 64MB.
+
+**Naming places.** Dropping a POINT marker asks what the place is called, so the
+map ends up with the names people actually shout: the bunker, the donut, the
+grave. Everything else drops in one tap with its type as the label, which is
+what you want when you are marking a contact.
+
 ## Sites with no signal
 
 Everything below is about the two separate problems a site like a quarry, a
@@ -292,10 +320,11 @@ the error rather than a confident dot.
 ## Testing
 
 ```bash
-npm test              # all three suites
+npm test              # all four suites
 npm run test:smoke    # two browsers join a game and check they see each other
 npm run test:indoor   # station check-ins, dead reckoning, team lock, site plans
 npm run test:terrain  # contours, hillshade, line of sight, parcels, boundary
+npm run test:replay   # recording a game and playing it back
 ```
 
 The indoor suite drives the step detector with synthetic accelerometer events
@@ -319,6 +348,8 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
   hillshade, ground profiles and line of sight.
 - `public/js/parcels.js` — the registered-parcel layer and adopting plots as the
   site boundary.
+- `public/js/replay.js` — reading a recorded game back, interpolating each
+  player's position at any moment, and driving the playback.
 - `scripts/inspire-to-geojson.js` — HM Land Registry INSPIRE Index Polygons
   (GML, British National Grid) to GeoJSON.
 - `scripts/geojson-to-kml.js` — GeoJSON to KML, for checking a boundary in

@@ -315,4 +315,16 @@ a.btn { display: inline-block; text-align: center; text-decoration: none; }
   color: var(--accent);
 }
 .btn.play { border-color: var(--accent); color: var(--accent); }
+.chip.replay { background: rgba(10, 30, 46, .92); border-color: rgba(125, 211, 252, .7); color: #7dd3fc; }
+.chip.replay b { color: #fff; font-variant-numeric: tabular-nums; }
+.rp-row { padding: 8px 12px 4px; }
+.rp-row .btn { white-space: nowrap; padding: 10px 6px; letter-spacing: 0; }
+#rp-roster { max-height: 22vh; }
+.scrub { padding: 4px 12px 10px; }
+.scrub input[type=range] { width: 100%; }
+body.replaying .tool[data-act="marker"],
+body.replaying .tool[data-act="draw"],
+body.replaying .tool[data-act="ping"],
+body.replaying .tool[data-act="status"] { opacity: .35; pointer-events: none; }
+.rp-when { font-size: 11px; color: var(--muted); }
 .note code { color: var(--accent); font-size: 10px; }
