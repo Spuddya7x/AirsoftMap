@@ -69,6 +69,20 @@
       { maxNativeZoom: 17, maxZoom: 20, attribution: '&copy; OpenTopoMap (CC-BY-SA)' }),
     STREET: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       { maxNativeZoom: 19, maxZoom: 21, attribution: '&copy; OpenStreetMap contributors' }),
+    /* Bare-earth LIDAR relief: England only, but under a tree canopy it
+       shows the ground - gullies, banks, tracks - where imagery shows
+       nothing but green. */
+    LIDAR: L.tileLayer.wms(
+      'https://environment.data.gov.uk/spatialdata/lidar-composite-digital-terrain-model-dtm-1m/wms',
+      {
+        layers: 'Lidar_Composite_Hillshade_DTM_1m',
+        format: 'image/jpeg',
+        transparent: false,
+        maxNativeZoom: 20,
+        maxZoom: 22,
+        attribution: 'LIDAR &copy; Environment Agency',
+      }
+    ),
   };
   const LABELS = L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',

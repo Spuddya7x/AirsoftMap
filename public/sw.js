@@ -1,7 +1,7 @@
 /* AirsoftMap service worker: app shell + map tile caching for sites with
    no signal. Tiles you have looked at (or explicitly cached) keep working
    offline. */
-const SHELL = 'am-shell-v4';
+const SHELL = 'am-shell-v5';
 const TILES = 'am-tiles-v1';   // imagery and elevation tiles both live here
 
 const SHELL_FILES = [
@@ -20,6 +20,7 @@ const TILE_HOSTS = [
   'tile.opentopomap.org',
   'tile.openstreetmap.org',
   's3.amazonaws.com',            // elevation tiles, so terrain works offline
+  'environment.data.gov.uk',     // bare-earth LIDAR relief (England)
 ];
 
 self.addEventListener('install', (event) => {

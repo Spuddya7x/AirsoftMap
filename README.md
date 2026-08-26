@@ -118,6 +118,15 @@ if you would rather not.
 
 ## Reading the ground
 
+**Under a canopy, imagery is useless.** Aerial photography of dense woodland is
+a green blanket: the stream, the tracks and the boundary banks are all hidden.
+For sites in England there is a much better basemap &mdash; the Environment
+Agency's 1 m bare-earth LIDAR. It is a survey of the *ground*, with the trees
+removed, so gullies, ditches, hollow ways, old field banks and every track show
+up clearly. Pick LIDAR under Settings &rarr; BASE MAP. (England only; elsewhere
+the contours below are the fallback.)
+
+
 Satellite imagery of woodland is a green blanket: it says nothing about the
 shape of the ground, which is most of what matters when you are deciding where
 people can move, see and hold. Tap the height chip in the top bar for:
@@ -296,7 +305,8 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
 Positions are only ever sent to players sharing your game code, and only while
 the page is open.
 
-Imagery &copy; Esri, OpenTopoMap and OpenStreetMap contributors. Elevation from
+Imagery &copy; Esri, OpenTopoMap and OpenStreetMap contributors. LIDAR relief
+&copy; Environment Agency, Open Government Licence. Elevation from
 the [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) open
 dataset. Land parcels from HM Land Registry INSPIRE Index Polygons, &copy; Crown
 copyright and database right, under the Open Government Licence v3.0. QR encoding
