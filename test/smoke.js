@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const PORT = process.env.TEST_PORT || 8123;
+const PORT = Number(process.env.TEST_PORT) || (8500 + Math.floor(Math.random() * 200));
 const BASE = 'http://127.0.0.1:' + PORT;
 const EXEC = process.env.CHROMIUM_PATH || undefined;
 const SITE = { latitude: 51.1417, longitude: -0.9463 };
@@ -12,6 +12,20 @@ const SITE = { latitude: 51.1417, longitude: -0.9463 };
 const ROOM = 'TEST' + Date.now().toString(36).toUpperCase();
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Wait for the server to answer rather than guessing at a delay, so a stale
+   process on the port cannot quietly serve the tests instead. */
+async function waitForServer(timeoutMs) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try {
+      const res = await fetch(BASE + '/api/health');
+      if (res.ok) return true;
+    } catch (err) { /* not up yet */ }
+    await wait(150);
+  }
+  throw new Error('server did not start on port ' + PORT);
+}
 let failures = 0;
 function check(name, ok) {
   console.log((ok ? '  PASS  ' : '  FAIL  ') + name);
@@ -37,7 +51,10 @@ async function join(ctx, callsign, room, coords) {
   });
   server.stdout.on('data', (d) => process.env.VERBOSE && process.stdout.write('[srv] ' + d));
   server.stderr.on('data', (d) => process.stderr.write('[srv] ' + d));
-  await wait(900);
+  server.on('exit', (code) => {
+    if (code) { console.error('server exited with code ' + code); process.exit(1); }
+  });
+  await waitForServer(10000);
 
   const browser = await chromium.launch(EXEC ? { executablePath: EXEC } : {});
   const opts = { permissions: ['geolocation'], viewport: { width: 412, height: 900 }, deviceScaleFactor: 2 };

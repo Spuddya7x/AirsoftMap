@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AirsoftMap - station tags</title>
+<link rel="stylesheet" href="/css/app.css" />
+<style>
+  html, body { overflow: auto; background: #fff; color: #000; height: auto; }
+  .sheet-page { max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; letter-spacing: 2px; margin: 0 0 4px; }
+  .lede { font-size: 13px; line-height: 1.6; color: #333; margin: 0 0 20px; max-width: 60ch; }
+  .tags { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .tag-card {
+    border: 2px dashed #999; padding: 14px; text-align: center;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .tag-card .code { font-size: 30px; font-weight: 700; letter-spacing: 3px; margin-bottom: 2px; }
+  .tag-card .desc { font-size: 12px; color: #444; min-height: 16px; margin-bottom: 8px; }
+  .tag-card canvas, .tag-card img { width: 160px; height: 160px; image-rendering: pixelated; }
+  .tag-card .url { font-size: 9px; color: #666; word-break: break-all; margin-top: 6px; }
+  .controls { margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .controls input { width: 200px; padding: 8px; border: 1px solid #999; color: #000; background: #fff; }
+  .controls button { padding: 8px 14px; border: 1px solid #333; background: #eee; cursor: pointer; font-family: inherit; }
+  .empty { border: 2px dashed #999; padding: 20px; font-size: 13px; }
+  @media print {
+    .controls, .lede, h1 { display: none; }
+    .sheet-page { padding: 0; max-width: none; }
+    .tag-card { border-style: solid; border-color: #ccc; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet-page">
+  <h1>STATION TAGS</h1>
+  <p class="lede">
+    Print these, laminate them, and cable-tie or tape one at every station you
+    marked on the map. Underground there is no GPS: a player scans the tag with
+    their phone camera and the app puts them exactly there, which also resets
+    the drift on their dead-reckoned position. Codes work as NFC tag payloads
+    too &mdash; write the same URL to a sticker.
+  </p>
+  <div class="controls">
+    <label>Game code <input id="room" placeholder="WOODLAND-1" /></label>
+    <button id="load">LOAD</button>
+    <button id="print">PRINT</button>
+  </div>
+  <div class="tags" id="tags"></div>
+</div>
+
+<script src="/lib/qrcode.js"></script>
+<script>
+(function () {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const roomInput = document.getElementById('room');
+  roomInput.value = (params.get('room') || '').toUpperCase();
+
+  function render(stations, room) {
+    const box = document.getElementById('tags');
+    box.innerHTML = '';
+    if (!stations.length) {
+      box.innerHTML = '<div class="empty">No stations in game <b>' + room +
+        '</b> yet. In the app, open FIX and use ADD STATION HERE at each junction, ' +
+        'doorway or landmark, then come back and print.</div>';
+      return;
+    }
+    for (const st of stations) {
+      const url = location.origin + '/?room=' + encodeURIComponent(room) +
+        '&fix=' + encodeURIComponent(st.label || '');
+      const qr = qrcode(0, 'M');
+      qr.addData(url);
+      qr.make();
+
+      const card = document.createElement('div');
+      card.className = 'tag-card';
+      card.innerHTML =
+        '<div class="code">' + escapeHtml(st.label || 'ST') + '</div>' +
+        '<div class="desc">' + escapeHtml(st.note || '') + '</div>' +
+        qr.createImgTag(5, 8) +
+        '<div class="url">' + escapeHtml(url) + '</div>';
+      box.appendChild(card);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  async function load() {
+    const room = (roomInput.value || '').trim().toUpperCase();
+    if (!room) return;
+    history.replaceState(null, '', '?room=' + encodeURIComponent(room));
+    try {
+      const res = await fetch('/api/room/' + encodeURIComponent(room));
+      if (!res.ok) throw new Error('game ' + room + ' not found');
+      const data = await res.json();
+      render((data.markers || []).filter((m) => m.kind === 'station'), room);
+    } catch (err) {
+      document.getElementById('tags').innerHTML =
+        '<div class="empty">' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  document.getElementById('load').addEventListener('click', load);
+  document.getElementById('print').addEventListener('click', () => window.print());
+  if (roomInput.value) load();
+})();
+</script>
+</body>
+</html>

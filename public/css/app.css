@@ -114,7 +114,7 @@ select { appearance: none; }
 .tools {
   position: absolute; z-index: 600; left: 14px; right: 14px;
   bottom: calc(14px + var(--safe-bot));
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px;
 }
 .tool {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
@@ -232,6 +232,15 @@ select { appearance: none; }
 .crosshair i { position: absolute; background: var(--accent); opacity: .9; }
 .crosshair i:nth-child(1) { left: 50%; top: 0; bottom: 0; width: 1px; margin-left: -.5px; }
 .crosshair i:nth-child(2) { top: 50%; left: 0; right: 0; height: 1px; margin-top: -.5px; }
+.crosshair::before {
+  content: ''; position: absolute; inset: 12px; border: 1px solid var(--accent);
+  border-radius: 50%; opacity: .8;
+}
+#aim-readout {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  margin-top: 4px; white-space: nowrap; font-size: 10px; letter-spacing: 1px;
+  color: var(--accent); text-shadow: 0 0 4px #000, 0 1px 3px #000;
+}
 
 /* Toast --------------------------------------------------------------- */
 .toast {
@@ -263,3 +272,22 @@ select { appearance: none; }
   .tool span { font-size: 9px; }
   .chip { padding: 6px 8px; font-size: 10px; }
 }
+
+/* Station check-in ---------------------------------------------------- */
+.station-list { list-style: none; margin: 0; padding: 0; max-height: 34vh; overflow: auto; }
+.station-list li {
+  display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+  border-bottom: 1px solid var(--line-soft); cursor: pointer;
+}
+.station-list li:active { background: #101a11; }
+.station-code {
+  min-width: 34px; height: 26px; display: grid; place-items: center;
+  border: 1px solid var(--accent); color: var(--accent); font-size: 11px; padding: 0 6px;
+}
+.station-name { flex: 1; font-size: 12px; }
+.station-range { font-size: 11px; color: var(--muted); }
+.site-plan-image { image-rendering: auto; }
+input[type=range] { accent-color: var(--accent); width: 100%; padding: 0; background: transparent; border: 0; }
+.btn[disabled] { opacity: .35; pointer-events: none; }
+a.btn { display: inline-block; text-align: center; text-decoration: none; }
+.src-dr .dot { background: var(--warn); }

@@ -28,10 +28,12 @@
              spellcheck="false" placeholder="VIPER" />
     </label>
 
-    <label class="field">
+    <!-- Not a <label>: a label re-dispatches clicks to its first control,
+         which would make every team button select the first team. -->
+    <div class="field">
       <span>TEAM</span>
       <div class="team-picker" id="f-team-picker"></div>
-    </label>
+    </div>
 
     <label class="field">
       <span>ROLE</span>
@@ -96,6 +98,10 @@
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg>
     <span>PING</span>
   </button>
+  <button class="tool" data-act="fix" title="Fix your position at a known point">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4M12 9v6M9 12h6"/></svg>
+    <span>FIX</span>
+  </button>
   <button class="tool" data-act="status" title="Report your status">
     <svg viewBox="0 0 24 24"><path d="M12 3v10M12 17v2"/><circle cx="12" cy="12" r="10"/></svg>
     <span>STATE</span>
@@ -126,6 +132,42 @@
     <button class="btn primary" id="draw-save">SAVE</button>
   </div>
   <div class="readout" id="draw-readout">0 points</div>
+</div>
+
+<!-- Station check-in (used where there is no GPS) -->
+<div id="stationsheet" class="sheet hidden">
+  <div class="sheet-head">
+    <b>FIX POSITION</b>
+    <span class="hint" id="station-hint">tap the station you are standing at</span>
+    <button class="x" data-close>&#10005;</button>
+  </div>
+  <ul class="station-list" id="station-list"></ul>
+  <div class="row wrap" style="padding:10px 12px">
+    <button class="btn" id="btn-here">I AM AT THE CROSSHAIR</button>
+    <button class="btn" id="btn-station-new">ADD STATION HERE</button>
+    <button class="btn" id="btn-nfc">SCAN NFC TAG</button>
+  </div>
+  <div class="readout" id="fix-readout"></div>
+</div>
+
+<!-- Site plan placement -->
+<div id="plansheet" class="sheet hidden">
+  <div class="sheet-head">
+    <b>PLACE SITE PLAN</b>
+    <span class="hint">drag the crosshair handle to move it</span>
+    <button class="x" id="btn-plan-done">&#10005;</button>
+  </div>
+  <div class="panel-body">
+    <label class="field"><span>WIDTH <em id="plan-width-out"></em></span>
+      <input type="range" id="plan-width" min="10" max="4000" step="5" /></label>
+    <label class="field"><span>ROTATION <em id="plan-rot-out"></em></span>
+      <input type="range" id="plan-rot" min="0" max="359" step="1" /></label>
+    <label class="field"><span>OPACITY</span>
+      <input type="range" id="plan-op" min="10" max="100" step="5" /></label>
+    <p class="note">Scale it by lining two known points on the drawing up with
+      the same two points on the ground &mdash; a building corner, a gate, a
+      shaft head. Everyone else sees the placement as you change it.</p>
+  </div>
 </div>
 
 <!-- Status sheet -->
@@ -160,7 +202,33 @@
       <label class="toggle"><input type="checkbox" id="opt-accuracy" checked /> <span>GPS accuracy rings</span></label>
       <label class="toggle"><input type="checkbox" id="opt-labels" checked /> <span>Marker labels</span></label>
       <label class="toggle"><input type="checkbox" id="opt-lock" /> <span>Keep screen centred on me</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-aim" checked /> <span>One finger moves the crosshair, two move the map</span></label>
       <label class="toggle"><input type="checkbox" id="opt-wake" checked /> <span>Keep screen awake</span></label>
+    </div>
+
+    <div class="set-group">
+      <label>POSITIONING</label>
+      <div class="row wrap" id="posmode-buttons"></div>
+      <p class="note" id="posmode-note"></p>
+      <label class="toggle"><input type="checkbox" id="opt-snap" /> <span>Snap to drawn routes</span></label>
+      <div class="readout" id="pdr-readout">dead reckoning off</div>
+      <button class="btn" id="btn-pdr-enable">ENABLE MOTION SENSORS</button>
+    </div>
+
+    <div class="set-group">
+      <label>SITE PLAN</label>
+      <p class="note">No satellite view underground. Upload a drawing, survey or
+        sketch of the site and place it over the map for everyone.</p>
+      <div class="readout" id="plan-name">no site plan loaded</div>
+      <input type="file" id="plan-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none" />
+      <div class="row wrap">
+        <button class="btn" onclick="document.getElementById('plan-file').click()">UPLOAD</button>
+        <button class="btn" id="btn-plan-place">PLACE</button>
+        <button class="btn" id="btn-plan-fit">ZOOM TO</button>
+        <button class="btn danger" id="btn-plan-clear">REMOVE</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="opt-nobase" /> <span>Hide satellite basemap</span></label>
+      <a class="btn" id="btn-print" href="#" target="_blank" rel="noopener">PRINT STATION TAGS</a>
     </div>
 
     <div class="set-group">
@@ -173,6 +241,12 @@
 
     <div class="set-group">
       <label>GAME</label>
+      <label class="toggle"><input type="checkbox" id="opt-teamlock" />
+        <span>Team only &mdash; teams cannot see each other</span></label>
+      <p class="note">Applies to the whole game. Each team sees its own players,
+        markers and drawings; safety and site information (stations, spawns, safe
+        zone, hazards, no-go areas, the boundary) stays visible to everyone, and
+        anyone with the MARSHAL role sees the lot.</p>
       <div class="readout" id="share-readout"></div>
       <button class="btn" id="btn-share">SHARE JOIN LINK</button>
       <button class="btn" id="btn-demo-toggle">TOGGLE DEMO PLAYERS</button>
@@ -198,12 +272,17 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<div id="crosshair" class="crosshair hidden"><i></i><i></i></div>
+<div id="crosshair" class="crosshair hidden">
+  <i></i><i></i>
+  <span id="aim-readout"></span>
+</div>
 
 <script src="/lib/leaflet.js"></script>
 <script src="/js/util.js"></script>
 <script src="/js/icons.js"></script>
 <script src="/js/net.js"></script>
+<script src="/js/pdr.js"></script>
+<script src="/js/plan.js"></script>
 <script src="/js/demo.js"></script>
 <script src="/js/app.js"></script>
 </body>

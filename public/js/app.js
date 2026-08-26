@@ -3,6 +3,7 @@
   'use strict';
 
   const { $, $$, el, store, toast } = U;
+  const PLUSMINUS = String.fromCharCode(177);
 
   /* ------------------------------------------------------------------ *
    * State
@@ -24,8 +25,24 @@
     battery: null,
     wakeLock: null,
     demo: null,
-    opts: store.get('opts', { trails: false, accuracy: true, labels: true, lock: false, wake: true }),
+    /* Defaults merged with whatever was stored, so options added in a later
+       version still appear for players who used an earlier one. */
+    opts: Object.assign({
+      trails: false, accuracy: true, labels: true, lock: false, wake: true,
+      snap: false, nobase: false, pdrEnabled: false, aim: true,
+    }, store.get('opts', {})),
+    /* How we currently believe we know where we are. */
+    nav: {
+      mode: store.get('posmode', 'auto'),  // auto | indoor | manual
+      fix: null,        // { lat, lng, acc, src, ts }
+      anchor: null,     // last position we actually trusted
+      drDistance: 0,    // metres dead reckoned since that anchor
+    },
   };
+
+  /* Motion sensors: only useful where there is no satellite fix. */
+  const pdr = PDR.supported() ? new PDR() : null;
+  if (pdr) pdr.k = store.get('pdrK', pdr.k);
 
   /* ------------------------------------------------------------------ *
    * Map + base layers
@@ -103,6 +120,7 @@
    * ------------------------------------------------------------------ */
 
   const net = new Net();
+  const sitePlan = new SitePlan({ map, net, state });
 
   net.on('link', ({ up }) => {
     $('#link-dot').className = 'dot ' + (up ? 'ok' : 'bad');
@@ -115,13 +133,30 @@
   net.on('welcome', (msg) => {
     state.joined = true;
     $('#chip-room').textContent = msg.room;
-    for (const p of msg.players) upsertPlayer(p);
-    for (const m of msg.markers) upsertMarker(m);
-    for (const d of msg.drawings) upsertDrawing(d);
-    renderRoster();
+    applySnapshot(msg);
+    applyPendingFix();
     sendPosition(true);
-    toast('JOINED ' + msg.room);
+    toast('JOINED ' + msg.room + (msg.teamLock ? ' (TEAM ONLY)' : ''));
   });
+
+  /** Wipe everything the server owns, keeping anything local to demo mode. */
+  function clearWorld() {
+    for (const [id, p] of [...state.players]) {
+      if (!p.demo && !isMe(id)) removePlayer(id);
+    }
+    for (const [id, rec] of [...state.markers]) if (!rec.data.demo) removeMarker(id);
+    for (const [id, rec] of [...state.drawings]) if (!rec.data.demo) removeDrawing(id);
+  }
+
+  function applySnapshot(msg) {
+    for (const p of msg.players || []) upsertPlayer(p);
+    for (const m of msg.markers || []) upsertMarker(m);
+    for (const d of msg.drawings || []) upsertDrawing(d);
+    sitePlan.apply(msg.plan || null);
+    $('#opt-teamlock').checked = !!msg.teamLock;
+    renderRoster();
+    refreshStationsIfOpen();
+  }
 
   net.on('player', (msg) => { upsertPlayer(msg.player); renderRoster(); });
   net.on('pos', (msg) => {
@@ -141,6 +176,16 @@
     if (msg.by && msg.by !== (state.me && state.me.callsign)) toast(msg.by + ' PINGED THE MAP');
   });
   net.on('msg', (msg) => toast(msg.by + ': ' + msg.text, 4000));
+  net.on('resync', (msg) => {
+    clearWorld();
+    applySnapshot(msg);
+    toast(msg.teamLock ? 'TEAM ONLY: OTHER TEAMS ARE NOW HIDDEN' : 'ALL TEAMS VISIBLE', 3500);
+  });
+
+  net.on('site', (msg) => {
+    sitePlan.apply(msg.plan);
+    if (msg.plan) toast('SITE PLAN UPDATED');
+  });
 
   /* ------------------------------------------------------------------ *
    * Players
@@ -184,15 +229,20 @@
 
     /* accuracy ring */
     let ring = state.layers.accuracy.get(p.id);
-    if (state.opts.accuracy && p.acc != null && p.acc > 5) {
+    if (state.opts.accuracy && p.acc != null && p.acc > 4) {
       const color = mine ? '#b6ff3a' : ICONS.teamColor(p.team);
+      const dashed = p.src === 'dr' ? '5 6' : null;
       if (!ring) {
-        ring = L.circle(ll, { radius: p.acc, color, weight: 1, opacity: 0.5, fillColor: color, fillOpacity: 0.06, interactive: false });
+        ring = L.circle(ll, {
+          radius: p.acc, color, weight: 1, opacity: 0.5, dashArray: dashed,
+          fillColor: color, fillOpacity: 0.06, interactive: false,
+        });
         ring.addTo(map);
         state.layers.accuracy.set(p.id, ring);
       } else {
         ring.setLatLng(ll);
         ring.setRadius(p.acc);
+        ring.setStyle({ color, dashArray: dashed });
       }
     } else if (ring) {
       map.removeLayer(ring);
@@ -271,6 +321,11 @@
     });
     layer.addTo(map);
     state.markers.set(m.id, { data: m, layer });
+    if (m.kind === 'station') refreshStationsIfOpen();
+  }
+
+  function refreshStationsIfOpen() {
+    if (!$('#stationsheet').classList.contains('hidden')) renderStations();
   }
 
   function removeMarker(id) {
@@ -281,21 +336,103 @@
     if (state.detailId === id) closeSheets();
   }
 
-  /** Where a "map centre" action actually lands: the middle of the map area
-   *  that is still visible above whatever sheet is open. */
-  function aimLatLng() {
+  /* ------------------------------------------------------------------ *
+   * The crosshair
+   *
+   * On a phone, one finger drags the crosshair and two fingers move the
+   * map. That way you can put the crosshair exactly where you mean -
+   * on a doorway, on the treeline - without your thumb covering it, and
+   * every "drop it here" action uses that point.
+   * ------------------------------------------------------------------ */
+
+  const aim = { point: null, dragging: false, startedAt: null };
+  const FINGER_OFFSET = 64;   // px above the fingertip, so you can see it
+
+  /** Default crosshair position: middle of the map still visible above a sheet. */
+  function defaultAimPoint() {
     const size = map.getSize();
     const sheet = $$('.sheet').find((n) => !n.classList.contains('hidden'));
     const covered = sheet ? Math.max(0, size.y - sheet.getBoundingClientRect().top) : 0;
-    return map.containerPointToLatLng([size.x / 2, (size.y - covered) / 2]);
+    return L.point(size.x / 2, (size.y - covered) / 2);
   }
 
-  function positionCrosshair() {
-    const size = map.getSize();
-    const sheet = $$('.sheet').find((n) => !n.classList.contains('hidden'));
-    const covered = sheet ? Math.max(0, size.y - sheet.getBoundingClientRect().top) : 0;
-    $('#crosshair').style.top = ((size.y - covered) / 2) + 'px';
+  function aimLatLng() {
+    if (state.pendingLatLng) return state.pendingLatLng;
+    const pt = (state.opts.aim && aim.point) ? aim.point : defaultAimPoint();
+    return map.containerPointToLatLng(pt);
   }
+
+  function positionCrosshair(pt) {
+    const p = pt || (state.opts.aim && aim.point) || defaultAimPoint();
+    aim.point = p;
+    const node = $('#crosshair');
+    node.style.left = p.x + 'px';
+    node.style.top = p.y + 'px';
+    updateAimReadout();
+  }
+
+  function updateAimReadout() {
+    const node = $('#aim-readout');
+    if (!node || $('#crosshair').classList.contains('hidden')) return;
+    const at = aimLatLng();
+    const me = state.nav.fix;
+    const d = U.distance(me, at);
+    node.textContent = d == null ? '--'
+      : U.fmtDist(d) + ' ' + U.compass(U.bearing(me, at));
+  }
+
+  function crosshairVisible() {
+    return !!state.opts.aim || state.mode === 'marker';
+  }
+
+  function refreshCrosshair() {
+    const show = state.joined && crosshairVisible();
+    $('#crosshair').classList.toggle('hidden', !show);
+    if (show) positionCrosshair(state.mode === 'marker' && !state.opts.aim ? defaultAimPoint() : null);
+  }
+
+  function setAimMode(on) {
+    state.opts.aim = on;
+    store.set('opts', state.opts);
+    if (on && L.Browser.touch) map.dragging.disable();
+    else map.dragging.enable();
+    refreshCrosshair();
+  }
+
+  /* One finger drags the crosshair; anything with two fingers falls through
+     to Leaflet, which pans and zooms the map together. */
+  (function bindAimTouch() {
+    const box = map.getContainer();
+    let startX = 0;
+    let startY = 0;
+
+    box.addEventListener('touchstart', (ev) => {
+      if (!state.opts.aim || ev.touches.length !== 1) { aim.dragging = false; return; }
+      startX = ev.touches[0].clientX;
+      startY = ev.touches[0].clientY;
+      aim.startedAt = Date.now();
+      aim.dragging = false;
+    }, { passive: true });
+
+    box.addEventListener('touchmove', (ev) => {
+      if (!state.opts.aim || ev.touches.length !== 1) return;
+      const t = ev.touches[0];
+      if (!aim.dragging && Math.hypot(t.clientX - startX, t.clientY - startY) < 8) return;
+      aim.dragging = true;
+      ev.preventDefault();
+      const box2 = box.getBoundingClientRect();
+      const x = Math.max(12, Math.min(box2.width - 12, t.clientX - box2.left));
+      const y = Math.max(12, Math.min(box2.height - 12, t.clientY - box2.top - FINGER_OFFSET));
+      positionCrosshair(L.point(x, y));
+    }, { passive: false });
+
+    box.addEventListener('touchend', () => {
+      /* A tap is not a drag: let it reach the map so drawing still works. */
+      setTimeout(() => { aim.dragging = false; }, 0);
+    }, { passive: true });
+  })();
+
+  map.on('move zoom', updateAimReadout);
 
   function dropMarker(kindKey, latlng) {
     const k = ICONS.kind(kindKey);
@@ -467,32 +604,15 @@
       hdg = prev ? prev.hdg : null;
     }
     state.lastFix = fix;
-
     const acc = c.accuracy != null ? Math.round(c.accuracy) : null;
-    $('#gps-dot').className = 'dot ' + (acc == null ? 'warn' : acc <= 12 ? 'ok' : acc <= 30 ? 'warn' : 'bad');
-    $('#gps-text').textContent = acc == null ? 'GPS' : acc + 'm';
+    state.gnss = { lat: fix.lat, lng: fix.lng, acc, ts: Date.now() };
 
     if (!state.me) return;
-    const mine = Object.assign(state.players.get(state.me.id) || {}, {
-      id: state.me.id, callsign: state.me.callsign, team: state.me.team, role: state.me.role,
-      lat: fix.lat, lng: fix.lng, acc, hdg, spd: c.speed || 0,
-      batt: state.battery, ts: Date.now(), online: true, stale: false,
-    });
-    state.players.set(state.me.id, mine);
-    drawPlayer(mine);
-
-    state.lastPayload = {
-      t: 'pos', lat: fix.lat, lng: fix.lng, acc, hdg,
-      spd: c.speed || 0, batt: state.battery,
-    };
-    sendPosition(false);
-
-    if (state.opts.lock) map.panTo([fix.lat, fix.lng], { animate: true, duration: 0.4 });
-    if (!state.centredOnce) {
-      state.centredOnce = true;
-      map.setView([fix.lat, fix.lng], 17);
-    }
-    renderRoster();
+    /* Indoors and underground a satellite fix is either absent or a lie.
+       In those modes we ignore it entirely; in auto we drop obvious junk. */
+    if (state.nav.mode !== 'auto') return refreshFixChip();
+    if (acc != null && acc > 60) return refreshFixChip();
+    setFix({ lat: fix.lat, lng: fix.lng, acc, hdg, spd: c.speed || 0, src: 'gps' });
   }
 
   /** Push our position to the server, at most once a second. */
@@ -505,9 +625,218 @@
   }
 
   function onFixError(err) {
-    $('#gps-dot').className = 'dot bad';
-    $('#gps-text').textContent = err.code === 1 ? 'GPS BLOCKED' : 'NO FIX';
+    state.gnss = null;
+    refreshFixChip();
     if (err.code === 1) toast('LOCATION PERMISSION DENIED - OTHERS CANNOT SEE YOU', 5000);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Position engine
+   *
+   * Everything that can say where a player is funnels through setFix: a
+   * satellite fix, a check-in at a known station, a dead-reckoned step,
+   * or a position placed by hand. Each carries an honest accuracy, so
+   * the map can show how much of it to believe.
+   * ------------------------------------------------------------------ */
+
+  function setFix(f) {
+    if (!state.me) return;
+    const now = Date.now();
+    const trusted = f.src !== 'dr';
+
+    state.nav.fix = { lat: f.lat, lng: f.lng, acc: f.acc, src: f.src, ts: now };
+    if (trusted) {
+      state.nav.anchor = { lat: f.lat, lng: f.lng, ts: now, src: f.src };
+      state.nav.drDistance = 0;
+      if (pdr) pdr.beginLeg();
+    }
+
+    const mine = Object.assign(state.players.get(state.me.id) || {}, {
+      id: state.me.id, callsign: state.me.callsign, team: state.me.team, role: state.me.role,
+      lat: f.lat, lng: f.lng, acc: f.acc,
+      hdg: f.hdg != null ? f.hdg : (pdr && pdr.heading != null ? pdr.heading : null),
+      spd: f.spd || 0, src: f.src, batt: state.battery,
+      ts: now, online: true, stale: false,
+    });
+    state.players.set(state.me.id, mine);
+    drawPlayer(mine);
+
+    state.lastPayload = {
+      t: 'pos', lat: f.lat, lng: f.lng, acc: f.acc, hdg: mine.hdg,
+      spd: mine.spd, src: f.src, batt: state.battery,
+    };
+    sendPosition(false);
+
+    if (state.opts.lock) map.panTo([f.lat, f.lng], { animate: true, duration: 0.4 });
+    if (!state.centredOnce) {
+      state.centredOnce = true;
+      map.setView([f.lat, f.lng], 18);
+    }
+    refreshFixChip();
+    renderRoster();
+  }
+
+  /** One detected step: move the estimate along, and widen the error. */
+  function advanceDR(metres, heading) {
+    const fix = state.nav.fix;
+    if (!fix || !state.me || state.nav.mode === 'manual') return;
+
+    state.nav.drDistance += metres;
+    let next = fix;
+    /* No compass reading means we know they moved but not which way, so
+       the blip stays put and only the uncertainty grows. */
+    if (heading != null) {
+      next = U.destination(fix, heading, metres);
+      if (state.opts.snap) next = snapToRoutes(next) || next;
+    }
+    setFix({
+      lat: next.lat, lng: next.lng, src: 'dr', hdg: heading, spd: 0,
+      acc: Math.round(PDR.uncertainty(state.nav.drDistance, pdr ? pdr.headingJitter : 0)),
+    });
+  }
+
+  /** Pull a dead-reckoned position onto the nearest drawn route, if close.
+   *  In a tunnel you are on the tunnel, which kills most of the drift. */
+  function snapToRoutes(at) {
+    let best = null;
+    let bestDist = 25;    // metres; past this, trust the sensors instead
+    for (const rec of state.drawings.values()) {
+      const d = rec.data;
+      if (d.shape !== 'line' && d.shape !== 'arrow') continue;
+      for (let i = 1; i < d.points.length; i++) {
+        const hit = nearestOnSegment(at, d.points[i - 1], d.points[i]);
+        if (hit && hit.dist < bestDist) { bestDist = hit.dist; best = hit.point; }
+      }
+    }
+    return best;
+  }
+
+  /** Closest point on segment a-b to p, worked in local metres. */
+  function nearestOnSegment(p, a, b) {
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * Math.cos(U.rad(p.lat));
+    const px = (p.lng - a.lng) * mPerDegLng;
+    const py = (p.lat - a.lat) * mPerDegLat;
+    const bx = (b.lng - a.lng) * mPerDegLng;
+    const by = (b.lat - a.lat) * mPerDegLat;
+    const len2 = bx * bx + by * by;
+    if (!len2) return null;
+    const t = Math.max(0, Math.min(1, (px * bx + py * by) / len2));
+    const cx = bx * t;
+    const cy = by * t;
+    return {
+      dist: Math.hypot(px - cx, py - cy),
+      point: { lat: a.lat + cy / mPerDegLat, lng: a.lng + cx / mPerDegLng },
+    };
+  }
+
+  function refreshFixChip() {
+    const f = state.nav.fix;
+    const dot = $('#gps-dot');
+    const text = $('#gps-text');
+    if (!f) {
+      dot.className = 'dot bad';
+      text.textContent = state.gnss ? 'GPS ' + (state.gnss.acc || '?') + 'm' : 'NO FIX';
+      return;
+    }
+    const age = Date.now() - f.ts;
+    if (f.src === 'dr') {
+      dot.className = 'dot warn';
+      text.textContent = 'DR ' + PLUSMINUS + Math.round(f.acc) + 'm';
+    } else if (f.src === 'anchor' || f.src === 'manual') {
+      dot.className = 'dot ' + (age > 240000 ? 'warn' : 'ok');
+      text.textContent = (f.src === 'anchor' ? 'FIX ' : 'SET ') + U.fmtAge(age);
+    } else {
+      const acc = f.acc;
+      dot.className = 'dot ' + (acc == null ? 'warn' : acc <= 12 ? 'ok' : acc <= 30 ? 'warn' : 'bad');
+      text.textContent = acc == null ? 'GPS' : 'GPS ' + acc + 'm';
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Stations: known points you stand on to reset the drift
+   * ------------------------------------------------------------------ */
+
+  function stations() {
+    return [...state.markers.values()].map((r) => r.data).filter((m) => m.kind === 'station');
+  }
+
+  function renderStations() {
+    const list = $('#station-list');
+    list.innerHTML = '';
+    const from = state.nav.fix;
+    const found = stations().sort((a, b) => {
+      const da = U.distance(from, a);
+      const db = U.distance(from, b);
+      return (da == null ? 1e9 : da) - (db == null ? 1e9 : db);
+    });
+
+    if (!found.length) {
+      list.appendChild(el('li', {
+        html: '<span class="station-name">No stations yet. Walk the site once and drop a' +
+              ' STATION marker at every junction, doorway and landmark. Those are the points' +
+              ' people check in at when there is no GPS.</span>',
+      }));
+      return;
+    }
+
+    for (const st of found) {
+      const d = U.distance(from, st);
+      const li = el('li', { onclick: () => { checkIn(st); closeSheets(); setMode(null); } });
+      li.innerHTML =
+        '<span class="station-code">' + U.escapeHtml((st.label || 'ST').slice(0, 6)) + '</span>' +
+        '<span class="station-name">' + U.escapeHtml(st.note || st.label || 'STATION') + '</span>' +
+        '<span class="station-range">' + (d == null ? '' : U.fmtDist(d)) + '</span>';
+      list.appendChild(li);
+    }
+  }
+
+  /** Standing at a known point: snap there, and learn this player's stride. */
+  function checkIn(st) {
+    const prev = state.nav.anchor;
+    let extra = '';
+    if (pdr && pdr.running && prev && prev.src === 'anchor') {
+      const k = pdr.calibrate(U.distance(prev, st));
+      if (k) {
+        store.set('pdrK', k);
+        extra = ' / STRIDE CALIBRATED';
+      }
+    }
+    setFix({ lat: st.lat, lng: st.lng, acc: PDR.DRIFT_FLOOR, src: 'anchor' });
+    toast('FIXED AT ' + (st.label || 'STATION') + extra, 3000);
+  }
+
+  /** A ?fix=CODE link, i.e. a QR code printed and stuck to a wall. */
+  function applyPendingFix() {
+    const code = params.get('fix');
+    if (!code) return;
+    const st = stations().find((m) => (m.label || '').toUpperCase() === code.toUpperCase());
+    if (st) checkIn(st);
+    else toast('STATION ' + code.toUpperCase() + ' IS NOT ON THIS MAP', 4000);
+  }
+
+  async function scanNfc() {
+    if (!('NDEFReader' in window)) {
+      return toast('THIS PHONE CANNOT READ NFC TAGS FROM THE BROWSER', 4000);
+    }
+    try {
+      const reader = new NDEFReader();
+      await reader.scan();
+      toast('HOLD THE PHONE AGAINST THE TAG', 5000);
+      reader.onreading = (ev) => {
+        const decoder = new TextDecoder();
+        for (const rec of ev.message.records) {
+          let text = '';
+          try { text = decoder.decode(rec.data); } catch (err) { continue; }
+          const code = (text.match(/fix=([A-Za-z0-9-]+)/) || [null, text.trim()])[1];
+          const st = stations().find((m) => (m.label || '').toUpperCase() === String(code).toUpperCase());
+          if (st) { checkIn(st); closeSheets(); return; }
+        }
+        toast('TAG DOES NOT MATCH A STATION ON THIS MAP', 4000);
+      };
+    } catch (err) {
+      toast('NFC UNAVAILABLE: ' + err.message, 4000);
+    }
   }
 
   /* battery, for the roster readout */
@@ -558,6 +887,8 @@
       const brg = mine ? null : U.bearing(me, p);
       const tags = [];
       if (p.status && p.status !== 'ok') tags.push('<i class="tag ' + p.status + '">' + p.status.toUpperCase() + '</i>');
+      if (p.src === 'dr') tags.push('<i class="tag hit">DR ' + PLUSMINUS + Math.round(p.acc || 0) + 'm</i>');
+      if (p.src === 'anchor' || p.src === 'manual') tags.push('<i class="tag respawn">CHECKED IN</i>');
       if (p.online === false) tags.push('<i class="tag stale">OFFLINE</i>');
       else if (p.stale) tags.push('<i class="tag stale">STALE</i>');
 
@@ -586,7 +917,11 @@
    * ------------------------------------------------------------------ */
 
   function closeSheets() {
-    for (const id of ['#palette', '#drawbar', '#statesheet', '#detail']) $(id).classList.add('hidden');
+    /* Every bottom sheet except the site-plan one, which SitePlan owns and
+       closes itself when you finish placing. */
+    for (const node of $$('.sheet')) {
+      if (node.id !== 'plansheet') node.classList.add('hidden');
+    }
     state.detailId = null;
   }
   function closePanels() {
@@ -601,8 +936,7 @@
   function setMode(mode) {
     state.mode = mode;
     for (const btn of $$('.tool')) btn.classList.toggle('on', btn.dataset.act === mode);
-    $('#crosshair').classList.toggle('hidden', mode !== 'marker');
-    if (mode === 'marker') setTimeout(positionCrosshair, 0);
+    setTimeout(refreshCrosshair, 0);
     if (mode !== 'draw') clearDraft();
     if (mode !== 'marker') state.pendingLatLng = null;
     if (!mode) closeSheets();
@@ -630,13 +964,19 @@
       return;
     }
     if (act === 'status') { openSheet('#statesheet'); return; }
+    if (act === 'fix') {
+      renderStations();
+      $('#fix-readout').textContent = fixSummary();
+      openSheet('#stationsheet');
+      return;
+    }
 
     if (state.mode === act) { setMode(null); return; }
     setMode(act);
     if (act === 'marker') {
       $('#palette-hint').textContent = state.pendingLatLng ? 'placed where you held' : 'placed at the crosshair';
       openSheet('#palette');
-      positionCrosshair();
+      refreshCrosshair();
     }
     if (act === 'draw') { openSheet('#drawbar'); }
   }));
@@ -726,6 +1066,89 @@
     closeSheets();
   });
 
+  /* station check-in sheet */
+  $('#btn-nfc').addEventListener('click', scanNfc);
+
+  $('#btn-here').addEventListener('click', () => {
+    const at = aimLatLng();
+    setFix({ lat: at.lat, lng: at.lng, acc: 8, src: 'manual' });
+    toast('POSITION SET BY HAND');
+    closeSheets();
+    setMode(null);
+  });
+
+  $('#btn-station-new').addEventListener('click', () => {
+    const code = (prompt('Short code for this station (e.g. J1, SHAFT, DOOR-3)') || '').trim().toUpperCase();
+    if (!code) return;
+    const name = (prompt('Description (optional)') || '').trim();
+    const at = aimLatLng();
+    net.send({ t: 'marker:add', kind: 'station', label: code.slice(0, 12), note: name, lat: at.lat, lng: at.lng });
+    toast('STATION ' + code + ' ADDED');
+    setTimeout(renderStations, 500);
+  });
+
+  function fixSummary() {
+    const f = state.nav.fix;
+    if (!f) return 'no position yet - check in at a station or set one by hand';
+    const bits = ['source: ' + f.src.toUpperCase(), 'error ' + PLUSMINUS + Math.round(f.acc || 0) + 'm'];
+    if (state.nav.drDistance > 0) bits.push(U.fmtDist(state.nav.drDistance) + ' since last check-in');
+    if (pdr && pdr.running) bits.push(pdr.legSteps + ' steps');
+    return bits.join('  /  ');
+  }
+
+  /* positioning mode */
+  const POS_MODES = [
+    { key: 'auto', name: 'AUTO', note: 'Use GPS while it is any good, and dead reckon from the last known point when it is not. Best for outdoor sites with patchy cover.' },
+    { key: 'indoor', name: 'INDOOR', note: 'Ignore GPS completely. Position comes from checking in at stations, and dead reckoning between them. For buildings, tunnels and underground sites.' },
+    { key: 'manual', name: 'MANUAL', note: 'Nothing moves your blip except you. Drag the crosshair and press I AM AT THE CROSSHAIR, or check in at a station.' },
+  ];
+
+  function renderPosModes() {
+    const box = $('#posmode-buttons');
+    box.innerHTML = '';
+    for (const m of POS_MODES) {
+      box.appendChild(el('button', {
+        class: 'btn' + (m.key === state.nav.mode ? ' on' : ''),
+        text: m.name,
+        onclick: () => {
+          state.nav.mode = m.key;
+          store.set('posmode', m.key);
+          renderPosModes();
+          if (m.key !== 'auto' && pdr && !pdr.running && state.opts.pdrEnabled) enablePdr();
+          toast('POSITIONING: ' + m.name);
+        },
+      }));
+    }
+    const mode = POS_MODES.find((m) => m.key === state.nav.mode);
+    $('#posmode-note').textContent = mode ? mode.note : '';
+  }
+
+  async function enablePdr() {
+    if (!pdr) return toast('THIS DEVICE HAS NO MOTION SENSORS');
+    const ok = await pdr.start();
+    if (!ok) return toast('MOTION SENSOR PERMISSION REFUSED', 4000);
+    pdr.onStep = advanceDR;
+    state.opts.pdrEnabled = true;
+    store.set('opts', state.opts);
+    toast('MOTION SENSORS ON - CHECK IN AT TWO STATIONS TO CALIBRATE YOUR STRIDE', 5000);
+  }
+
+  $('#btn-pdr-enable').addEventListener('click', enablePdr);
+
+  setInterval(() => {
+    const node = $('#pdr-readout');
+    if (!node) return;
+    if (!pdr) { node.textContent = 'no motion sensors on this device'; return; }
+    if (!pdr.running) { node.textContent = 'dead reckoning off'; return; }
+    const stride = (pdr.k * Math.pow(9, 0.25)).toFixed(2);
+    node.textContent =
+      pdr.steps + ' steps  /  stride ~' + stride + 'm  /  ' +
+      (pdr.heading == null ? 'no compass' : 'heading ' + Math.round(pdr.heading) + String.fromCharCode(176)) +
+      (pdr.headingJitter > 12 ? '  /  COMPASS UNSTABLE (steel nearby?)' : '');
+    if ($('#stationsheet').classList.contains('hidden')) return;
+    $('#fix-readout').textContent = fixSummary();
+  }, 1000);
+
   /* panels */
   $('#btn-roster').addEventListener('click', () => {
     const panel = $('#roster');
@@ -741,7 +1164,7 @@
   });
 
   /* options */
-  const OPT_KEYS = ['trails', 'accuracy', 'labels', 'lock', 'wake'];
+  const OPT_KEYS = ['trails', 'accuracy', 'labels', 'lock', 'wake', 'snap', 'nobase', 'aim'];
   function bindOptions() {
     for (const key of OPT_KEYS) {
       const box = $('#opt-' + key);
@@ -755,6 +1178,14 @@
   }
   function applyOptions() {
     document.body.classList.toggle('no-labels', !state.opts.labels);
+    setAimMode(!!state.opts.aim);
+    if (state.opts.nobase) {
+      if (map.hasLayer(BASES[baseName])) map.removeLayer(BASES[baseName]);
+      if (map.hasLayer(LABELS)) map.removeLayer(LABELS);
+    } else if (!map.hasLayer(BASES[baseName])) {
+      BASES[baseName].addTo(map);
+      if (labelsOn) LABELS.addTo(map);
+    }
     if (!state.opts.trails) {
       for (const [id, layer] of state.layers.trails) { map.removeLayer(layer); state.layers.trails.delete(id); }
     }
@@ -762,6 +1193,11 @@
     if (state.opts.wake) requestWakeLock();
     else if (state.wakeLock) { state.wakeLock.release().catch(() => {}); state.wakeLock = null; }
   }
+
+  /* team-only visibility is a property of the game, not of this phone */
+  $('#opt-teamlock').addEventListener('change', (ev) => {
+    net.send({ t: 'room:set', teamLock: ev.target.checked });
+  });
 
   /* share */
   $('#btn-share').addEventListener('click', async () => {
@@ -901,6 +1337,8 @@
   buildDrawShapes();
   renderLayerButtons();
   bindOptions();
+  renderPosModes();
+  sitePlan.bind();
 
   function join(demoMode) {
     const callsign = ($('#f-callsign').value || '').trim().toUpperCase() ||
@@ -913,13 +1351,15 @@
     state.me = { id, callsign, team: chosenTeam, role, room };
     store.set('session', { id, callsign, team: chosenTeam, role, room });
 
+    state.joined = true;
     $('#join').classList.add('hidden');
     $('#hud').classList.remove('hidden');
     $('#tools').classList.remove('hidden');
     $('#chip-room').textContent = room;
     $('#share-readout').textContent = location.origin + '/?room=' + encodeURIComponent(room);
     applyOptions();
-    setTimeout(() => map.invalidateSize(), 50);
+    $('#btn-print').href = '/print.html?room=' + encodeURIComponent(room);
+    setTimeout(() => { map.invalidateSize(); refreshCrosshair(); }, 50);
 
     state.players.set(id, {
       id, callsign, team: chosenTeam, role, status: 'ok',
@@ -930,6 +1370,13 @@
     startTracking();
     requestWakeLock();
     renderRoster();
+    refreshFixChip();
+
+    /* Motion sensors need a user gesture on iOS, and this click is one. */
+    if (pdr && state.opts.pdrEnabled) {
+      pdr.onStep = advanceDR;
+      pdr.start().then((ok) => { if (!ok) toast('MOTION SENSORS BLOCKED'); });
+    }
 
     if (demoMode) {
       // Drop the demo squad wherever we are (or a default patch of woodland).
@@ -946,7 +1393,7 @@
   $('#f-callsign').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') join(false); });
 
   /* Exposed for debugging from the browser console (and for the tests). */
-  window.AM = { state, map, net, ICONS, U };
+  window.AM = { state, map, net, pdr, sitePlan, ICONS, U };
 
   /* service worker */
   if ('serviceWorker' in navigator) {

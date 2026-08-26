@@ -1,14 +1,16 @@
 /* AirsoftMap service worker: app shell + map tile caching for sites with
    no signal. Tiles you have looked at (or explicitly cached) keep working
    offline. */
-const SHELL = 'am-shell-v1';
+const SHELL = 'am-shell-v2';
 const TILES = 'am-tiles-v1';
 
 const SHELL_FILES = [
   '/', '/index.html',
   '/css/app.css',
-  '/js/util.js', '/js/icons.js', '/js/net.js', '/js/demo.js', '/js/app.js',
-  '/lib/leaflet.js', '/lib/leaflet.css',
+  '/js/util.js', '/js/icons.js', '/js/net.js', '/js/pdr.js', '/js/plan.js',
+  '/js/demo.js', '/js/app.js',
+  '/lib/leaflet.js', '/lib/leaflet.css', '/lib/qrcode.js',
+  '/print.html',
   '/manifest.webmanifest',
   '/icons/icon.svg',
 ];

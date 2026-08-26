@@ -30,6 +30,7 @@
     { key: 'chrono',    name: 'CHRONO',    glyph: 'C',  color: '#e2e8f0' },
     { key: 'parking',   name: 'PARKING',   glyph: 'P',  color: '#94a3b8' },
     { key: 'poi',       name: 'POINT',     glyph: '●', color: '#e5e7eb' },
+    { key: 'station',   name: 'STATION',   glyph: '⌖', color: '#b6ff3a' },
   ];
   const KIND_BY_KEY = Object.fromEntries(KINDS.map((k) => [k.key, k]));
   const kind = (key) => KIND_BY_KEY[key] || KIND_BY_KEY.poi;

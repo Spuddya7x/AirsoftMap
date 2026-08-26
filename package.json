@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js && node test/indoor.js",
+    "test:smoke": "node test/smoke.js",
+    "test:indoor": "node test/indoor.js"
   },
   "repository": {
     "type": "git",
