@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#0a0e0a" />
+<meta name="description" content="Live team tracking and tactical intel map for airsoft games." />
+<title>AirsoftMap</title>
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icons/icon-192.png" />
+<link rel="stylesheet" href="/lib/leaflet.css" />
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Join screen                                                         -->
+<!-- ------------------------------------------------------------------ -->
+<div id="join" class="screen">
+  <div class="join-card">
+    <h1 class="brand">AIRSOFT<span>MAP</span></h1>
+    <p class="tagline">Live team tracking &amp; tactical intel</p>
+
+    <label class="field">
+      <span>CALLSIGN</span>
+      <input id="f-callsign" maxlength="12" autocomplete="off" autocapitalize="characters"
+             spellcheck="false" placeholder="VIPER" />
+    </label>
+
+    <label class="field">
+      <span>TEAM</span>
+      <div class="team-picker" id="f-team-picker"></div>
+    </label>
+
+    <label class="field">
+      <span>ROLE</span>
+      <select id="f-role">
+        <option>RIFLE</option>
+        <option>SUPPORT</option>
+        <option>DMR</option>
+        <option>SNIPER</option>
+        <option>MEDIC</option>
+        <option>SQUAD LEAD</option>
+        <option>MARSHAL</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>GAME CODE <em>everyone on the same code sees each other</em></span>
+      <input id="f-room" maxlength="24" autocomplete="off" autocapitalize="characters"
+             spellcheck="false" placeholder="WOODLAND-1" />
+    </label>
+
+    <button id="f-go" class="btn primary big">DEPLOY</button>
+    <button id="f-demo" class="btn ghost big">RUN DEMO (no GPS needed)</button>
+
+    <p class="fineprint">
+      Location is shared only with players using the same game code, and only while
+      this page is open.
+    </p>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Map                                                                 -->
+<!-- ------------------------------------------------------------------ -->
+<div id="map"></div>
+<div class="frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+<!-- Top status bar -->
+<header id="hud" class="hud hidden">
+  <button id="btn-menu" class="chip" title="Settings">&#9776;</button>
+  <div class="chip" id="chip-room">--</div>
+  <div class="chip" id="chip-link"><span class="dot" id="link-dot"></span><span id="link-text">LINK</span></div>
+  <div class="chip" id="chip-gps"><span class="dot" id="gps-dot"></span><span id="gps-text">GPS</span></div>
+  <div class="spacer"></div>
+  <button id="btn-roster" class="chip">TEAM <b id="roster-count">0</b></button>
+</header>
+
+<!-- Bottom toolbar -->
+<nav id="tools" class="tools hidden">
+  <button class="tool" data-act="locate" title="Centre on me">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>
+    <span>ME</span>
+  </button>
+  <button class="tool" data-act="marker" title="Drop a marker">
+    <svg viewBox="0 0 24 24"><path d="M12 2l10 10-10 10L2 12z"/></svg>
+    <span>MARK</span>
+  </button>
+  <button class="tool" data-act="draw" title="Draw a line or zone">
+    <svg viewBox="0 0 24 24"><path d="M3 20L10 8l4 6 7-11"/></svg>
+    <span>DRAW</span>
+  </button>
+  <button class="tool" data-act="ping" title="Ping the map for everyone">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg>
+    <span>PING</span>
+  </button>
+  <button class="tool" data-act="status" title="Report your status">
+    <svg viewBox="0 0 24 24"><path d="M12 3v10M12 17v2"/><circle cx="12" cy="12" r="10"/></svg>
+    <span>STATE</span>
+  </button>
+</nav>
+
+<!-- Marker palette -->
+<div id="palette" class="sheet hidden">
+  <div class="sheet-head">
+    <b>DROP MARKER</b>
+    <span class="hint" id="palette-hint">placed at map centre</span>
+    <button class="x" data-close>&#10005;</button>
+  </div>
+  <div class="palette-grid" id="palette-grid"></div>
+</div>
+
+<!-- Draw controls -->
+<div id="drawbar" class="sheet hidden">
+  <div class="sheet-head">
+    <b>DRAW</b>
+    <span class="hint" id="draw-hint">tap the map to add points</span>
+    <button class="x" data-close>&#10005;</button>
+  </div>
+  <div class="row" id="draw-shapes"></div>
+  <div class="row">
+    <button class="btn" id="draw-undo">UNDO PT</button>
+    <button class="btn" id="draw-clear">CANCEL</button>
+    <button class="btn primary" id="draw-save">SAVE</button>
+  </div>
+  <div class="readout" id="draw-readout">0 points</div>
+</div>
+
+<!-- Status sheet -->
+<div id="statesheet" class="sheet hidden">
+  <div class="sheet-head"><b>MY STATUS</b><button class="x" data-close>&#10005;</button></div>
+  <div class="row" id="state-buttons">
+    <button class="btn state-ok" data-state="ok">IN PLAY</button>
+    <button class="btn state-hit" data-state="hit">HIT</button>
+    <button class="btn state-down" data-state="down">NEED HELP</button>
+    <button class="btn state-respawn" data-state="respawn">RESPAWNING</button>
+  </div>
+</div>
+
+<!-- Roster -->
+<aside id="roster" class="panel hidden">
+  <div class="panel-head"><b>TEAM</b><button class="x" data-close>&#10005;</button></div>
+  <ul id="roster-list"></ul>
+</aside>
+
+<!-- Settings -->
+<aside id="settings" class="panel hidden">
+  <div class="panel-head"><b>SETTINGS</b><button class="x" data-close>&#10005;</button></div>
+  <div class="panel-body">
+    <div class="set-group">
+      <label>BASE MAP</label>
+      <div class="row wrap" id="layer-buttons"></div>
+    </div>
+
+    <div class="set-group">
+      <label>OVERLAYS</label>
+      <label class="toggle"><input type="checkbox" id="opt-trails" /> <span>Movement trails</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-accuracy" checked /> <span>GPS accuracy rings</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-labels" checked /> <span>Marker labels</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-lock" /> <span>Keep screen centred on me</span></label>
+      <label class="toggle"><input type="checkbox" id="opt-wake" checked /> <span>Keep screen awake</span></label>
+    </div>
+
+    <div class="set-group">
+      <label>OFFLINE MAP</label>
+      <p class="note">No signal on site? Cache the tiles for the current view while
+        you still have data. Zoom to your land first.</p>
+      <button class="btn" id="btn-cache">CACHE THIS AREA</button>
+      <div class="readout" id="cache-readout">not cached yet</div>
+    </div>
+
+    <div class="set-group">
+      <label>GAME</label>
+      <div class="readout" id="share-readout"></div>
+      <button class="btn" id="btn-share">SHARE JOIN LINK</button>
+      <button class="btn" id="btn-demo-toggle">TOGGLE DEMO PLAYERS</button>
+      <button class="btn danger" id="btn-leave">LEAVE GAME</button>
+    </div>
+
+    <p class="fineprint">AirsoftMap &mdash; self-hosted. Imagery &copy; Esri / OpenStreetMap contributors.</p>
+  </div>
+</aside>
+
+<!-- Marker detail -->
+<div id="detail" class="sheet hidden">
+  <div class="sheet-head"><b id="detail-title">MARKER</b><button class="x" data-close>&#10005;</button></div>
+  <div class="panel-body">
+    <label class="field"><span>LABEL</span><input id="detail-label" maxlength="40" /></label>
+    <label class="field"><span>NOTE</span><input id="detail-note" maxlength="200" /></label>
+    <div class="readout" id="detail-meta"></div>
+    <div class="row">
+      <button class="btn" id="detail-save">SAVE</button>
+      <button class="btn danger" id="detail-del">DELETE</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<div id="crosshair" class="crosshair hidden"><i></i><i></i></div>
+
+<script src="/lib/leaflet.js"></script>
+<script src="/js/util.js"></script>
+<script src="/js/icons.js"></script>
+<script src="/js/net.js"></script>
+<script src="/js/demo.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "airsoftmap",
+  "version": "1.0.0",
+  "description": "Live team tracking and tactical intel map for airsoft games. Self-hosted.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Spuddya7x/AirsoftMap.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Spuddya7x/AirsoftMap/issues"
+  },
+  "homepage": "https://github.com/Spuddya7x/AirsoftMap#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "leaflet": "^1.9.4",
+    "ws": "^8.21.3"
+  },
+  "private": true,
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}
