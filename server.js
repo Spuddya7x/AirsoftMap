@@ -15,6 +15,7 @@ const DROP_MS = 15 * 60000;    // disconnected players forgotten after this
 const MAX_MARKERS = 500;
 const MAX_DRAWINGS = 300;
 const MAX_STRUCTURES = 200;
+const MAX_SCANS = 60;
 const MAX_MSG_BYTES = 64 * 1024;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -23,7 +24,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
  * Room state
  * ------------------------------------------------------------------ */
 
-/** roomId -> { id, markers, drawings, structures, players: Map, updatedAt } */
+/** roomId -> { id, markers, drawings, structures, scans, players, updatedAt } */
 const rooms = new Map();
 
 function loadState() {
@@ -36,6 +37,7 @@ function loadState() {
         markers: new Map((r.markers || []).map((m) => [m.id, m])),
         drawings: new Map((r.drawings || []).map((d) => [d.id, d])),
         structures: new Map((r.structures || []).map((b) => [b.id, b])),
+        scans: new Map((r.scans || []).map((c) => [c.id, c])),
         players: new Map(),
         plan: r.plan || null,
         parcels: r.parcels || null,
@@ -65,6 +67,7 @@ function saveStateSoon() {
         markers: [...r.markers.values()],
         drawings: [...r.drawings.values()],
         structures: [...r.structures.values()],
+        scans: [...r.scans.values()],
       })),
     };
     fs.writeFile(STATE_FILE + '.tmp', JSON.stringify(out), (err) => {
@@ -81,7 +84,7 @@ function getRoom(id) {
   if (!room) {
     room = {
       id, markers: new Map(), drawings: new Map(), structures: new Map(),
-      players: new Map(),
+      scans: new Map(), players: new Map(),
       plan: null, parcels: null, teamLock: false, updatedAt: Date.now(),
     };
     rooms.set(id, room);
@@ -377,6 +380,61 @@ app.post('/api/room/:id/parcels',
     res.json({ ok: true, parcels: room.parcels });
   });
 
+/* --- scans ----------------------------------------------------------
+ * Gaussian splats: a photoreal capture of one place, taken on a phone
+ * and processed on the phone. What arrives here has already been
+ * converted in the browser to the renderer's own compact format, which
+ * is why the limit below is generous rather than enormous - the raw
+ * export it came from is ten times the size and never crosses the wire.
+ *
+ * A scan does not have to be anywhere. One of a bedroom, taken to find
+ * out whether any of this works, has no position and never gets one.
+ * ------------------------------------------------------------------- */
+
+const SCAN_DIR = path.join(DATA_DIR, 'scans');
+fs.mkdirSync(SCAN_DIR, { recursive: true });
+app.use('/scans', express.static(SCAN_DIR, { maxAge: '1h' }));
+
+app.post('/api/room/:id/scan',
+  express.raw({ type: ['application/octet-stream'], limit: '200mb' }),
+  (req, res) => {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty upload' });
+
+    const roomId = cleanRoomId(req.params.id);
+    const room = getRoom(roomId);
+    if (room.scans.size >= MAX_SCANS) {
+      return res.status(409).json({ error: 'this game already has ' + MAX_SCANS + ' scans' });
+    }
+
+    const id = newId('s');
+    const file = roomId + '-' + id + '.ksplat';
+    try {
+      fs.writeFileSync(path.join(SCAN_DIR, file), req.body);
+    } catch (err) {
+      return res.status(500).json({ error: 'could not store the scan' });
+    }
+
+    const scan = {
+      id,
+      file,
+      url: '/scans/' + file,
+      name: cleanText(req.query.name, 40) || 'SCAN',
+      bytes: req.body.length,
+      splats: Math.max(0, Math.round(Number(req.query.splats) || 0)),
+      /* Null until someone says where on the site it belongs, which for
+         plenty of scans is never. */
+      placed: null,
+      ts: Date.now(),
+    };
+    room.scans.set(id, scan);
+    room.updatedAt = scan.ts;
+    saveStateSoon();
+    broadcast(room, { t: 'scan', scan });
+    console.log('[scan] ' + scan.name + ' (' + (scan.bytes / 1048576).toFixed(1) + ' MB, '
+      + scan.splats.toLocaleString() + ' splats) -> ' + roomId);
+    res.json({ ok: true, scan });
+  });
+
 /* --- replay ---------------------------------------------------------
  * Games are split on long gaps in the log rather than being started and
  * stopped by hand: nobody remembers to press record.
@@ -463,6 +521,7 @@ app.get('/api/room/:id', (req, res) => {
     markers: [...room.markers.values()],
     drawings: [...room.drawings.values()],
     structures: [...room.structures.values()],
+    scans: [...room.scans.values()],
   });
 });
 
@@ -500,8 +559,10 @@ function snapshotFor(room, viewer) {
       .map(publicPlayer),
     markers: [...room.markers.values()].filter((m) => canSeeItem(room, viewer, m)),
     drawings: [...room.drawings.values()].filter((d) => canSeeItem(room, viewer, d)),
-    /* Structures are the site itself, not intel: everyone sees them. */
+    /* Structures and scans are the site itself, not intel: everyone
+       sees them. */
     structures: [...room.structures.values()],
+    scans: [...room.scans.values()],
   };
 }
 
@@ -718,6 +779,54 @@ wss.on('connection', (ws) => {
         room.updatedAt = Date.now();
         saveStateSoon();
         broadcast(room, { t: 'struct:del', id });
+        return;
+      }
+
+      /* --- scans --------------------------------------------------- */
+      case 'scan:place': {
+        const c = room.scans.get(cleanText(msg.id, 40));
+        if (!c) return;
+        if (msg.placed === null) {
+          c.placed = null;
+        } else {
+          const ll = latLng(msg);
+          const was = c.placed || {};
+          if (!ll && !was.lat) return;
+          c.placed = {
+            lat: ll ? ll.lat : was.lat,
+            lng: ll ? ll.lng : was.lng,
+            rot: msg.rot === undefined ? (was.rot || 0) : normaliseAngle(msg.rot),
+            /* Scans come out of the phone at real-world scale already;
+               the handle is here for when they do not. */
+            scale: num(msg.scale) === null ? (was.scale || 1) : clamp(msg.scale, 0.02, 50),
+            lift: num(msg.lift) === null ? (was.lift || 0) : clamp(msg.lift, -30, 60),
+            tilt: num(msg.tilt) === null ? (was.tilt || 0) : clamp(msg.tilt, -90, 90),
+          };
+        }
+        c.ts = Date.now();
+        room.updatedAt = c.ts;
+        saveStateSoon();
+        broadcast(room, { t: 'scan', scan: c });
+        return;
+      }
+      case 'scan:rename': {
+        const c = room.scans.get(cleanText(msg.id, 40));
+        if (!c) return;
+        c.name = cleanText(msg.name, 40) || c.name;
+        room.updatedAt = Date.now();
+        saveStateSoon();
+        broadcast(room, { t: 'scan', scan: c });
+        return;
+      }
+      case 'scan:del': {
+        const id = cleanText(msg.id, 40);
+        const c = room.scans.get(id);
+        if (!c) return;
+        room.scans.delete(id);
+        fs.unlink(path.join(SCAN_DIR, c.file), () => {});
+        room.updatedAt = Date.now();
+        saveStateSoon();
+        broadcast(room, { t: 'scan:del', id });
         return;
       }
 

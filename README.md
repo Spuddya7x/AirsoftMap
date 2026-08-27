@@ -35,6 +35,12 @@ It also works where GPS does not: indoors, in tunnels, and underground.
 - **Map pings.** Ping a spot and everyone's map flashes there.
 - **Replay.** Every game records itself; afterwards, scrub back through it and
   watch everyone move.
+- **The site in 3D.** A companion view of the real hillside built from national
+  LIDAR &mdash; the ground at one metre and every tree on it, found by measuring
+  the canopy &mdash; that you can fly, or walk at eye height.
+- **Phone scans.** Walk round the cabin with a phone and drop the result in:
+  photoreal captures pinned onto the terrain at their real coordinates, or
+  looked at on their own.
 - **Team-only games.** Optionally lock the game so each team sees only its own
   players and its own intel. Safety and site information stays visible to
   everyone, and marshals see the lot.
@@ -225,6 +231,48 @@ canopy off when it is in the way.
 England only, because the LIDAR is. Elsewhere the viewer still runs, but the
 terrain has to come from somewhere else.
 
+## Scanning the things LIDAR cannot see
+
+A one-metre survey resolves banks, ditches and the stream channel. It does not
+resolve a firepit, and under a canopy the first laser return is a tree rather
+than a roof, so the cabin is not in there either. Those come off a phone.
+
+**No special hardware, and nothing leaves the handset.** [Scaniverse][sc] (free,
+iOS and Android) walks you round a subject and turns it into a Gaussian splat
+*on the phone*, in about ninety seconds. Export `.spz` &mdash; or `.ply` if you
+want the uncompressed original &mdash; and drop it into the viewer under SCANS.
+
+**Try it at home first.** Scan a room. It takes five minutes and tells you
+whether the quality is worth a trip to the wood. A scan does not have to be
+anywhere: one with no position opens on its own, and needs no ground model, so
+this works before you have built terrain for anything.
+
+**What decides whether a capture works** is the walk, not the camera:
+
+- **Never rotate on the spot.** That is a panorama, not a 3D model. Move
+  *around* things. This is the mistake everyone makes first.
+- **Orbit at three heights** &mdash; knee, chest, above head &mdash; each a full
+  loop, overlapping about 70%.
+- **Overcast, not sunny.** Dappled shade under a canopy is the killer: hard
+  shadows shift between frames and bake in as mush.
+- **Winter, leaves off**, for anything in the wood proper.
+- **One place at a time.** Do not try to scan seven acres. A clearing, the
+  cabin, a bank worth putting sandbags on &mdash; 20 to 40 m across each.
+
+**The big file never crosses the wire.** A phone export is often a couple of
+hundred megabytes, most of it spherical harmonics describing view-dependent
+shine that a wood has no use for. The browser converts it on the machine that
+already has the file and uploads only the result &mdash; usually a tenth the
+size. Uploading is the same room the phones use, so a scan appears for everyone.
+
+**Putting one on the site.** Open a scan and press PUT ON THE SITE and it is
+pinned at real coordinates on the LIDAR terrain, with turn, tilt, lift and size
+to line it up against the ground. Take it off again and it goes back to being a
+thing you look at on its own. So the whole wood is the surveyed hill and its 554
+trees, and the places that matter are photoreal within it.
+
+[sc]: https://scaniverse.com/
+
 ## Replaying a game
 
 Every game records itself. Nobody has to remember to press anything: the server
@@ -377,10 +425,13 @@ npm run test:smoke    # two browsers join a game and check they see each other
 npm run test:indoor   # station check-ins, dead reckoning, team lock, site plans
 npm run test:terrain  # contours, hillshade, line of sight, parcels, boundary
 npm run test:replay   # recording a game and playing it back
-npm run test:viewer   # the LIDAR pipeline and the 3D site view
+npm run test:viewer   # the LIDAR pipeline, the 3D site view and scans
 ```
 
-The viewer suite checks the projection against a published Ordnance Survey
+The viewer suite builds a Gaussian splat scene from scratch rather than storing
+one, so the scan path — read the file, convert it, upload it, draw it the right
+way up at its real size, pin it to the hill — is tested without the network or a
+phone. It also checks the projection against a published Ordnance Survey
 control point, reads a hand-built GeoTIFF without touching the network, asserts
 the terrain mesh has one vertex per LIDAR sample and no spikes, and puts a
 building on the hill to confirm it lands where it was asked to, sits on the
@@ -412,7 +463,8 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
 - `public/js/viewer/` — the 3D site view: `terrain.js` turns the height grid
   into a shaded mesh and converts between latitude/longitude and grid metres,
   `trees.js` instances the wood, `structures.js` draws what is built and what
-  is proposed, `main.js` is the scene and the editing.
+  is proposed, `scans.js` converts a phone capture and puts it in the scene,
+  `main.js` is the scene and the editing.
 - `scripts/fetch-terrain.js` — Environment Agency LIDAR to a ground model and a
   tree list, for any boundary in England.
 - `scripts/lib/bng.js` — British National Grid to WGS84 and back, shared by

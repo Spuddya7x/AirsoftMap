@@ -7,6 +7,7 @@ const fs = require('fs');
 
 const { bngToWgs84, wgs84ToBng } = require('../scripts/lib/bng.js');
 const { readElevation } = require('../scripts/lib/geotiff.js');
+const { makeSplatPly } = require('./lib/make-splat-ply.js');
 
 const PORT = Number(process.env.TEST_PORT) || (9300 + Math.floor(Math.random() * 90));
 const BASE = 'http://127.0.0.1:' + PORT;
@@ -319,7 +320,103 @@ function testGeoTiff() {
     const sessions = await fetch(BASE + '/api/room/' + ROOM + '/sessions').then((r) => r.json());
     check('and nothing in the game log', (sessions.sessions || []).length === 0);
 
+    console.log('\nScans');
+    /* The whole path a phone capture takes: a file off the disk, read
+       and converted in the browser, uploaded, and drawn. */
+    const fixture = makeSplatPly(0.12);
+    const plyPath = path.join(dataDir, 'room.ply');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(plyPath, fixture.buffer);
+
+    page.on('dialog', (d) => d.accept('BEDROOM'));
+    await page.setInputFiles('#scan-file', plyPath);
+    await page.waitForFunction(() => window.AMV.state.scans.size === 1, null,
+      { timeout: 120000 });
+    await page.waitForFunction(() => {
+      const mesh = window.AMV.scans.viewer && window.AMV.scans.viewer.splatMesh;
+      return mesh && mesh.geometry.instanceCount > 0;
+    }, null, { timeout: 60000 });
+
+    const loaded = await page.evaluate(() => {
+      const scan = [...window.AMV.state.scans.values()][0];
+      const mesh = window.AMV.scans.viewer.splatMesh;
+      const box = window.AMV.scans.bounds();
+      return {
+        name: scan.name,
+        placed: scan.placed,
+        bytes: scan.bytes,
+        splats: scan.splats,
+        drawing: mesh.geometry.instanceCount,
+        min: box ? box.min.toArray() : null,
+        max: box ? box.max.toArray() : null,
+        groundHidden: !(window.AMV.scene.getObjectByName('ground') || {}).visible,
+      };
+    });
+
+    check('a phone capture converts and uploads (' + Math.round(fixture.buffer.length / 1024)
+      + ' KB became ' + Math.round(loaded.bytes / 1024) + ' KB)',
+    loaded.bytes > 0 && loaded.bytes < fixture.buffer.length);
+    check('every splat in the file ends up drawn (' + loaded.drawing + ')',
+      loaded.drawing === fixture.count && loaded.splats === fixture.count);
+    check('it takes the name it was given', loaded.name === 'BEDROOM');
+    check('a scan with no position is not on the site', loaded.placed === null);
+    check('and the site gets out of its way while it is open', loaded.groundHidden);
+
+    /* Splat files are stored y-down. Getting this wrong is not subtle:
+       the room arrives on its ceiling. */
+    const upright = loaded.min && loaded.max
+      && near(loaded.min[1], fixture.extent.y[0], 0.2)
+      && near(loaded.max[1], fixture.extent.y[1], 0.2);
+    check('it comes in the right way up (floor at ' + (loaded.min ? loaded.min[1].toFixed(2) : '?')
+      + ' m, ceiling at ' + (loaded.max ? loaded.max[1].toFixed(2) : '?') + ' m)', upright);
+    check('at its real size, not the file\'s arbitrary one',
+      loaded.max && near(loaded.max[0] - loaded.min[0], 5, 0.3)
+        && near(loaded.max[2] - loaded.min[2], 4, 0.3));
+
+    console.log('\nPutting a scan on the hill');
+    await page.evaluate(() => {
+      const t = window.AMV.state.terrain;
+      window.AMV.controls.target.set(110, t.heightAt(110, 190), 190);
+    });
+    await page.click('#scan-place');
+    /* Placing it rebuilds the splat scene after a short settle, so wait
+       for the drawn thing to actually be over there - the old one is
+       still on screen until it does. */
+    await page.waitForFunction(() => {
+      const scan = [...window.AMV.state.scans.values()][0];
+      if (!scan || !scan.placed) return false;
+      const box = window.AMV.scans.bounds();
+      if (!box) return false;
+      const centre = box.getCenter(new window.AMV.THREE.Vector3());
+      return Math.abs(centre.x - 110) < 1 && Math.abs(centre.z - 190) < 1;
+    }, null, { timeout: 60000 });
+
+    const onSite = await page.evaluate(() => {
+      const t = window.AMV.state.terrain;
+      const scan = [...window.AMV.state.scans.values()][0];
+      const box = window.AMV.scans.bounds();
+      const world = t.toWorld(scan.placed.lat, scan.placed.lng);
+      return {
+        world,
+        ground: t.heightAt(world.x, world.z),
+        centre: box ? box.getCenter(new window.AMV.THREE.Vector3()).toArray() : null,
+        floor: box ? box.min.y : null,
+        siteBack: !!(window.AMV.scene.getObjectByName('ground') || {}).visible,
+      };
+    });
+    check('it lands where it was put (' + onSite.world.x.toFixed(0) + ', '
+      + onSite.world.z.toFixed(0) + ')',
+    near(onSite.world.x, 110, 0.5) && near(onSite.world.z, 190, 0.5));
+    check('it is drawn there too', onSite.centre
+      && near(onSite.centre[0], 110, 0.5) && near(onSite.centre[2], 190, 0.5));
+    check('sitting on the ground, not floating over it',
+      near(onSite.floor, onSite.ground, 0.3));
+    check('and the site comes back around it', onSite.siteBack);
+
     console.log('\nEye level');
+    /* Back to the site itself: eye level is about the ground. */
+    await page.click('#scan-close');
+    await page.waitForFunction(() => !window.AMV.state.viewingScan, null, { timeout: 20000 });
     await page.click('#view-walk');
     await wait(400);
     check('it drops the camera to head height on the slope', await page.evaluate(() => {
@@ -327,6 +424,38 @@ function testGeoTiff() {
       const c = window.AMV.camera.position;
       return Math.abs(c.y - (t.heightAt(c.x, c.z) + 1.7)) < 0.6;
     }));
+    /* The reason someone can try this tonight: a scan of a bedroom has
+       nothing to do with a wood in Sussex, and must not need one. */
+    console.log('\nWith no ground model at all');
+    const bare = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+    bare.on('pageerror', (e) => { console.log('  PAGE ERROR', e.message); failures++; });
+    try {
+      await bare.goto(BASE + '/viewer.html?room=' + ROOM + '&site=nowhere-at-all',
+        { waitUntil: 'domcontentloaded' });
+      await bare.waitForFunction(
+        () => document.querySelector('#loading').classList.contains('gone'),
+        null, { timeout: 20000 }
+      );
+      check('the viewer still starts', await bare.evaluate(() => !!window.AMV));
+      check('it says why there is no ground, and how to get one',
+        await bare.$eval('#no-ground', (el) => !el.classList.contains('gone'))
+          && (await bare.$eval('#no-ground-cmd', (el) => el.textContent))
+            .includes('fetch-terrain.js'));
+      check('and the scans it already has are still listed',
+        (await bare.$eval('#stat-scans', (el) => el.textContent)) === '1');
+      check('opening one needs no terrain', await (async () => {
+        await bare.click('#scan-list li');
+        await bare.waitForFunction(() => {
+          const mesh = window.AMV.scans.viewer && window.AMV.scans.viewer.splatMesh;
+          return mesh && mesh.geometry.instanceCount > 0;
+        }, null, { timeout: 60000 });
+        return true;
+      })().catch(() => false));
+      check('and it cannot be put on a site that does not exist',
+        await bare.$eval('#scan-place', (el) => el.disabled));
+    } finally {
+      await bare.close();
+    }
   } finally {
     await browser.close();
     server.kill();

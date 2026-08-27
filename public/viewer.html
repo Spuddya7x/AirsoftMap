@@ -44,6 +44,24 @@
     </div>
   </section>
 
+  <section id="no-ground" class="gone warnbox">
+    <h2>No ground model</h2>
+    <p id="no-ground-why"></p>
+    <p>Scans still work. To get the hill and the trees as well, run:</p>
+    <pre id="no-ground-cmd"></pre>
+  </section>
+
+  <section>
+    <h2>Scans <span class="tally"><b id="stat-scans">0</b></span></h2>
+    <p class="lead">A slow walk around something with a phone, processed on the
+      phone. Try a room at home first &mdash; it takes five minutes and tells you
+      whether this is worth doing in the wood.</p>
+    <button id="scan-add">ADD A SCAN</button>
+    <input type="file" id="scan-file" hidden />
+    <p id="scan-status" class="status"></p>
+    <ul id="scan-list"></ul>
+  </section>
+
   <section>
     <h2>Put something here</h2>
     <div id="palette"></div>
@@ -80,6 +98,34 @@
   <p id="sel-ground" class="ground">&mdash;</p>
   <p id="sel-level"></p>
   <p class="tip">Drag it to move it. Delete removes it.</p>
+</aside>
+
+<aside id="scan-panel" class="gone">
+  <div class="head">
+    <b id="scan-name">&mdash;</b>
+    <button id="scan-close" title="Back to the site">&#10005;</button>
+  </div>
+  <div class="row buttons">
+    <button id="scan-place">PUT ON THE SITE</button>
+    <button id="scan-rename">RENAME</button>
+    <button id="scan-del" class="danger">DELETE</button>
+  </div>
+  <div id="scan-placed-controls" class="gone">
+    <label class="row"><span>Turn</span>
+      <input id="scan-rot" type="range" min="0" max="359" step="1" />
+      <output id="scan-rot-out">0&deg;</output></label>
+    <label class="row"><span>Tilt</span>
+      <input id="scan-tilt" type="range" min="-30" max="30" step="1" />
+      <output id="scan-tilt-out">0&deg;</output></label>
+    <label class="row"><span>Lift</span>
+      <input id="scan-lift" type="range" min="-10" max="20" step="1" />
+      <output id="scan-lift-out">0 m</output></label>
+    <label class="row"><span>Size</span>
+      <input id="scan-scale" type="range" min="10" max="400" step="1" />
+      <output id="scan-scale-out">1.00x</output></label>
+    <p class="tip">Scans come off the phone at real size, so the size handle is
+      only for when they do not.</p>
+  </div>
 </aside>
 
 <div id="readout">&mdash;</div>

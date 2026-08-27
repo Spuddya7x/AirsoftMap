@@ -23,6 +23,8 @@
   },
   "homepage": "https://github.com/Spuddya7x/AirsoftMap#readme",
   "dependencies": {
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
+    "@sparkjsdev/spark": "^2.1.0",
     "express": "^5.2.1",
     "leaflet": "^1.9.4",
     "three": "^0.185.1",
