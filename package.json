@@ -5,11 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.js && node test/indoor.js && node test/terrain.js && node test/replay.js",
+    "test": "node test/smoke.js && node test/indoor.js && node test/terrain.js && node test/replay.js && node test/viewer.js",
     "test:smoke": "node test/smoke.js",
     "test:indoor": "node test/indoor.js",
     "test:terrain": "node test/terrain.js",
-    "test:replay": "node test/replay.js"
+    "test:replay": "node test/replay.js",
+    "test:viewer": "node test/viewer.js"
   },
   "repository": {
     "type": "git",
@@ -24,6 +25,7 @@
   "dependencies": {
     "express": "^5.2.1",
     "leaflet": "^1.9.4",
+    "three": "^0.185.1",
     "ws": "^8.21.3"
   },
   "private": true,

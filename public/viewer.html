@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Site viewer</title>
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/css/viewer.css" />
+<script type="importmap">
+{ "imports": { "three": "/lib/three/three.module.min.js" } }
+</script>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div id="loading">
+  <h1>Reading the ground&hellip;</h1>
+  <p>One metre of Environment Agency LIDAR, and every tree on it.</p>
+</div>
+
+<header id="bar">
+  <b id="site-name">SITE</b>
+  <span class="room">room <b id="room-name">&mdash;</b></span>
+  <span id="link" class="down">connecting</span>
+  <span class="spacer"></span>
+  <button id="view-top" title="Look straight down">PLAN</button>
+  <button id="view-walk" title="Drop to eye height and walk">EYE LEVEL</button>
+</header>
+
+<aside id="panel">
+  <section>
+    <h2>The ground</h2>
+    <dl class="facts">
+      <div><dt>Extent</dt><dd id="stat-extent">&mdash;</dd></div>
+      <div><dt>Fall</dt><dd id="stat-fall">&mdash;</dd></div>
+      <div><dt>Trees</dt><dd id="stat-trees">&mdash;</dd></div>
+      <div><dt>Parcels</dt><dd id="stat-parcels">&mdash;</dd></div>
+    </dl>
+    <div class="layers">
+      <label><input type="checkbox" id="layer-trees" checked /> Trees</label>
+      <label><input type="checkbox" id="layer-parcels" checked /> Boundary</label>
+      <label><input type="checkbox" id="layer-intel" checked /> Intel</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Put something here</h2>
+    <div id="palette"></div>
+    <div class="layers">
+      <label><input type="checkbox" id="place-planned" /> As a proposal</label>
+      <label><input type="checkbox" id="place-sticky" /> Keep placing</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>On the site <span class="tally"><b id="stat-built">0</b> built,
+      <b id="stat-planned">0</b> proposed</span></h2>
+    <ul id="structure-list"></ul>
+  </section>
+</aside>
+
+<aside id="selection" class="gone">
+  <div class="head">
+    <b id="sel-kind">&mdash;</b>
+    <button id="sel-del" title="Remove it">&#10005;</button>
+  </div>
+  <label class="row"><span>Called</span>
+    <input id="sel-label" type="text" maxlength="40" placeholder="the cabin" /></label>
+  <div class="dims">
+    <label><span>Across</span><input id="sel-w" type="number" step="0.1" min="0.3" /></label>
+    <label><span>Deep</span><input id="sel-d" type="number" step="0.1" min="0.3" /></label>
+    <label><span>Tall</span><input id="sel-h" type="number" step="0.1" min="0.2" /></label>
+  </div>
+  <label class="row"><span>Facing</span>
+    <input id="sel-rot" type="range" min="0" max="359" step="1" />
+    <output id="sel-rot-out">0&deg;</output></label>
+  <label class="row check"><input id="sel-status" type="checkbox" />
+    <span>Not built yet &mdash; this is a proposal</span></label>
+  <p id="sel-ground" class="ground">&mdash;</p>
+  <p id="sel-level"></p>
+  <p class="tip">Drag it to move it. Delete removes it.</p>
+</aside>
+
+<div id="readout">&mdash;</div>
+<div id="hint"></div>
+<footer id="credit">
+  Ground and canopy: Environment Agency LIDAR Composite 1&nbsp;m, Open Government Licence v3.0.
+  Boundaries: HM Land Registry INSPIRE polygons.
+</footer>
+
+<script src="/js/net.js"></script>
+<script type="module" src="/js/viewer/main.js"></script>
+</body>
+</html>

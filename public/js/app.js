@@ -1574,6 +1574,13 @@
   });
 
   /* share */
+  /* The 3D view opens in its own tab, on the same room, so structures
+     put down there show up here and the other way round. */
+  $('#btn-viewer').addEventListener('click', () => {
+    $('#btn-viewer').href = '/viewer.html?room='
+      + encodeURIComponent(state.me ? state.me.room : '');
+  });
+
   $('#btn-share').addEventListener('click', async () => {
     const url = location.origin + '/?room=' + encodeURIComponent(state.me ? state.me.room : '');
     try {

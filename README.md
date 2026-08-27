@@ -173,6 +173,58 @@ contour or hillshade image from QGIS and load it as a site plan instead. The
 elevation tiles are cached by CACHE THIS AREA along with the imagery, so
 contours and line of sight keep working with no signal.
 
+## Seeing the site in 3D
+
+The map flattens a hillside. On a site with fifty metres of fall that hides the
+one thing that decides every game and every building, so there is a second view:
+`/viewer.html`, or Settings &rarr; 3D SITE VIEW, which opens the same room in
+three dimensions.
+
+**Nothing has to be photographed.** The ground and the trees both come out of
+the same free national survey:
+
+```bash
+node scripts/fetch-terrain.js --name green-wood --boundary my-site.geojson
+```
+
+That pulls two coverages from the Environment Agency for your boundary &mdash;
+bare earth, and first return &mdash; and writes `public/data/<name>.site.json`
+plus a `.heights.bin` grid. Bare earth is the ground with the trees taken off.
+The difference between the two is the canopy, and the local peaks of the canopy
+are the trees, so every stem is found and measured without anyone walking the
+wood. For Green Wood that is 73,660 ground samples at one metre and 554 trees
+with real positions and heights.
+
+Resolution is one sample per square metre, about &plusmn;15 cm vertically. That
+resolves anything roughly two metres across and a hand's breadth high: banks,
+ditches, the stream channel, old boundary banks, tracks. It will not resolve a
+firepit, and under a canopy the first return is the tree rather than a roof, so
+**things you built have to be placed by hand** &mdash; which is the other half
+of the view.
+
+**Putting buildings on it.** Pick a kind, click the ground, and it lands on the
+real slope: cabin, firepit, shed, container, tower, hide, store, bridge, gate.
+Drag to move, and set the footprint, height and which way it faces. Tick *as a
+proposal* and it draws as a blue ghost instead of a solid &mdash; the same
+object, the two states being "what is there" and "what we are arguing about".
+Selecting anything reports the height above sea level, the steepness, and the
+drop across its own footprint, so a five-metre cabin on a one-in-six slope says
+*ground falls 1.26 m across the footprint &mdash; that is a platform, not a
+base* before anyone buys timber.
+
+Structures live in the room like markers do, so they sync to the phones and
+survive a restart. The viewer joins as an **observer**: no blip, no roster
+entry, nothing in the game log.
+
+**Getting about.** Drag to orbit, scroll to zoom, W A S D to fly, Q and E for
+height, shift to go faster. PLAN looks straight down. EYE LEVEL drops you to
+1.7 m and keeps you there as you walk the ground, which is the honest way to
+find out whether you can actually see the far bank from the cabin. Turn the
+canopy off when it is in the way.
+
+England only, because the LIDAR is. Elsewhere the viewer still runs, but the
+terrain has to come from somewhere else.
+
 ## Replaying a game
 
 Every game records itself. Nobody has to remember to press anything: the server
@@ -320,12 +372,19 @@ the error rather than a confident dot.
 ## Testing
 
 ```bash
-npm test              # all four suites
+npm test              # all five suites
 npm run test:smoke    # two browsers join a game and check they see each other
 npm run test:indoor   # station check-ins, dead reckoning, team lock, site plans
 npm run test:terrain  # contours, hillshade, line of sight, parcels, boundary
 npm run test:replay   # recording a game and playing it back
+npm run test:viewer   # the LIDAR pipeline and the 3D site view
 ```
+
+The viewer suite checks the projection against a published Ordnance Survey
+control point, reads a hand-built GeoTIFF without touching the network, asserts
+the terrain mesh has one vertex per LIDAR sample and no spikes, and puts a
+building on the hill to confirm it lands where it was asked to, sits on the
+ground rather than through it, and reports the fall across its footprint.
 
 The indoor suite drives the step detector with synthetic accelerometer events
 and asserts the blip moves a plausible distance in the right direction, that
@@ -350,6 +409,15 @@ Requires Chromium; set `CHROMIUM_PATH` if Playwright's own download is not used.
   site boundary.
 - `public/js/replay.js` — reading a recorded game back, interpolating each
   player's position at any moment, and driving the playback.
+- `public/js/viewer/` — the 3D site view: `terrain.js` turns the height grid
+  into a shaded mesh and converts between latitude/longitude and grid metres,
+  `trees.js` instances the wood, `structures.js` draws what is built and what
+  is proposed, `main.js` is the scene and the editing.
+- `scripts/fetch-terrain.js` — Environment Agency LIDAR to a ground model and a
+  tree list, for any boundary in England.
+- `scripts/lib/bng.js` — British National Grid to WGS84 and back, shared by
+  everything that reads a national dataset.
+- `scripts/lib/geotiff.js` — just enough GeoTIFF to read a float elevation grid.
 - `scripts/inspire-to-geojson.js` — HM Land Registry INSPIRE Index Polygons
   (GML, British National Grid) to GeoJSON.
 - `scripts/geojson-to-kml.js` — GeoJSON to KML, for checking a boundary in

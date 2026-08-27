@@ -14,6 +14,7 @@ const STALE_MS = 90000;        // no fix for this long -> shown as stale
 const DROP_MS = 15 * 60000;    // disconnected players forgotten after this
 const MAX_MARKERS = 500;
 const MAX_DRAWINGS = 300;
+const MAX_STRUCTURES = 200;
 const MAX_MSG_BYTES = 64 * 1024;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -22,7 +23,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
  * Room state
  * ------------------------------------------------------------------ */
 
-/** roomId -> { id, markers: Map, drawings: Map, players: Map, updatedAt } */
+/** roomId -> { id, markers, drawings, structures, players: Map, updatedAt } */
 const rooms = new Map();
 
 function loadState() {
@@ -34,6 +35,7 @@ function loadState() {
         id: r.id,
         markers: new Map((r.markers || []).map((m) => [m.id, m])),
         drawings: new Map((r.drawings || []).map((d) => [d.id, d])),
+        structures: new Map((r.structures || []).map((b) => [b.id, b])),
         players: new Map(),
         plan: r.plan || null,
         parcels: r.parcels || null,
@@ -62,6 +64,7 @@ function saveStateSoon() {
         teamLock: !!r.teamLock,
         markers: [...r.markers.values()],
         drawings: [...r.drawings.values()],
+        structures: [...r.structures.values()],
       })),
     };
     fs.writeFile(STATE_FILE + '.tmp', JSON.stringify(out), (err) => {
@@ -77,7 +80,8 @@ function getRoom(id) {
   let room = rooms.get(id);
   if (!room) {
     room = {
-      id, markers: new Map(), drawings: new Map(), players: new Map(),
+      id, markers: new Map(), drawings: new Map(), structures: new Map(),
+      players: new Map(),
       plan: null, parcels: null, teamLock: false, updatedAt: Date.now(),
     };
     rooms.set(id, room);
@@ -105,6 +109,13 @@ function cleanText(v, max) {
     .replace(/[\u0000-\u001F\u007F]/g, '')
     .trim()
     .slice(0, max);
+}
+
+/** Degrees clockwise from grid north, wrapped into [0, 360). */
+function normaliseAngle(v) {
+  const n = num(v);
+  if (n === null) return 0;
+  return ((n % 360) + 360) % 360;
 }
 
 function newId(prefix) {
@@ -451,6 +462,7 @@ app.get('/api/room/:id', (req, res) => {
     parcels: room.parcels,
     markers: [...room.markers.values()],
     drawings: [...room.drawings.values()],
+    structures: [...room.structures.values()],
   });
 });
 
@@ -488,6 +500,8 @@ function snapshotFor(room, viewer) {
       .map(publicPlayer),
     markers: [...room.markers.values()].filter((m) => canSeeItem(room, viewer, m)),
     drawings: [...room.drawings.values()].filter((d) => canSeeItem(room, viewer, d)),
+    /* Structures are the site itself, not intel: everyone sees them. */
+    structures: [...room.structures.values()],
   };
 }
 
@@ -507,6 +521,20 @@ wss.on('connection', (ws) => {
     if (msg.t === 'join') {
       const roomId = cleanRoomId(msg.room);
       const room = getRoom(roomId);
+
+      /* An observer is watching the site rather than playing on it -
+         the 3D viewer, a laptop on the safe zone table. It gets the
+         shared picture and can edit structures, but it is not a player:
+         no blip, no roster entry, nothing in the game log. */
+      if (msg.observer) {
+        ws.roomId = roomId;
+        ws.playerId = null;
+        send(ws, Object.assign({ t: 'welcome', you: null, observer: true,
+          serverTime: Date.now() }, snapshotFor(room, null)));
+        console.log('[join] observer -> ' + roomId);
+        return;
+      }
+
       const id = cleanText(msg.id, 40) || newId('p');
 
       const existing = room.players.get(id);
@@ -630,6 +658,66 @@ wss.on('connection', (ws) => {
         room.updatedAt = Date.now();
         saveStateSoon();
         broadcast(room, { t: 'marker:del', id });
+        return;
+      }
+
+      /* --- structures ---------------------------------------------
+       * What is on the ground and what might be: the cabin and the
+       * firepit that already exist, and the shed nobody has built yet.
+       * The only difference between the two is the status field, which
+       * is what makes this a planning tool rather than an inventory.
+       * ------------------------------------------------------------- */
+      case 'struct:add': {
+        if (room.structures.size >= MAX_STRUCTURES) return;
+        const ll = latLng(msg);
+        if (!ll) return;
+        const structure = {
+          id: newId('b'),
+          kind: cleanText(msg.kind, 24) || 'cabin',
+          label: cleanText(msg.label, 40),
+          note: cleanText(msg.note, 240),
+          status: msg.status === 'planned' ? 'planned' : 'built',
+          lat: ll.lat,
+          lng: ll.lng,
+          rot: normaliseAngle(msg.rot),
+          w: clamp(num(msg.w) || 3, 0.3, 60),
+          d: clamp(num(msg.d) || 3, 0.3, 60),
+          h: clamp(num(msg.h) || 2.5, 0.2, 30),
+          by: ws.playerId,
+          byName: (room.players.get(ws.playerId) || {}).callsign || '',
+          ts: Date.now(),
+        };
+        room.structures.set(structure.id, structure);
+        room.updatedAt = structure.ts;
+        saveStateSoon();
+        broadcast(room, { t: 'struct', structure });
+        return;
+      }
+      case 'struct:update': {
+        const b = room.structures.get(cleanText(msg.id, 40));
+        if (!b) return;
+        const ll = latLng(msg);
+        if (ll) { b.lat = ll.lat; b.lng = ll.lng; }
+        if (msg.label !== undefined) b.label = cleanText(msg.label, 40);
+        if (msg.note !== undefined) b.note = cleanText(msg.note, 240);
+        if (msg.kind !== undefined) b.kind = cleanText(msg.kind, 24) || b.kind;
+        if (msg.status !== undefined) b.status = msg.status === 'planned' ? 'planned' : 'built';
+        if (msg.rot !== undefined) b.rot = normaliseAngle(msg.rot);
+        if (num(msg.w) !== null) b.w = clamp(msg.w, 0.3, 60);
+        if (num(msg.d) !== null) b.d = clamp(msg.d, 0.3, 60);
+        if (num(msg.h) !== null) b.h = clamp(msg.h, 0.2, 30);
+        b.ts = Date.now();
+        room.updatedAt = b.ts;
+        saveStateSoon();
+        broadcast(room, { t: 'struct', structure: b });
+        return;
+      }
+      case 'struct:del': {
+        const id = cleanText(msg.id, 40);
+        if (!room.structures.delete(id)) return;
+        room.updatedAt = Date.now();
+        saveStateSoon();
+        broadcast(room, { t: 'struct:del', id });
         return;
       }
 
